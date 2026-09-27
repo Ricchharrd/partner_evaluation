@@ -4,7 +4,31 @@ import os
 import urllib.error
 import urllib.request
 
-DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
+DEFAULT_OPENAI_MODEL = "gpt-6-luna"
+
+
+def safe_api_error(exc):
+    # Never render the server's free-text message: it can echo input or secrets.
+    try:
+        error = json.loads(exc.read(32_768)).get("error", {})
+        if not isinstance(error, dict):
+            error = {}
+    except (ValueError, OSError, AttributeError):
+        error = {}
+    codes = {"invalid_api_key", "model_not_found", "unsupported_parameter", "unsupported_value",
+             "invalid_value", "invalid_request_error", "insufficient_quota", "rate_limit_exceeded",
+             "context_length_exceeded", "invalid_json_schema"}
+    params = {"model", "reasoning", "reasoning.effort", "text.format", "text.format.type",
+              "max_output_tokens", "input", "instructions", "tools", "store"}
+    code = error.get("code")
+    param = error.get("param")
+    code = code if isinstance(code, str) and code in codes else "unclassified"
+    param = param if isinstance(param, str) and param in params else "unspecified"
+    hint = {400: "요청 형식 또는 모델 호환성을 확인해야 합니다. 키 오류로 단정할 수 없습니다.",
+            401: "API 키 인증을 확인하십시오.", 403: "API 프로젝트와 모델 접근 권한을 확인하십시오.",
+            404: "모델 이름과 계정의 모델 접근 권한을 확인하십시오.",
+            429: "API 결제 잔액·한도 또는 호출 속도를 확인하십시오."}.get(exc.code, "API 서비스 상태를 확인하십시오.")
+    return f"OpenAI API 요청 실패 (HTTP {exc.code}; code={code}; param={param}). {hint}"
 
 
 def response_text(payload):
@@ -23,8 +47,8 @@ class OpenAIProvider:
     name = "openai"
 
     def __init__(self, api_key=None, model=None, timeout=90):
-        self.api_key = api_key if api_key is not None else os.getenv("OPENAI_API_KEY", "")
-        self.model = model or os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
+        self.api_key = (api_key if api_key is not None else os.getenv("OPENAI_API_KEY", "")).strip()
+        self.model = (model or os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)).strip()
         self.timeout = timeout
 
     @property
@@ -35,13 +59,15 @@ class OpenAIProvider:
         if not self.available:
             raise ValueError("Streamlit Secrets에 OPENAI_API_KEY를 설정하십시오.")
         body = {**body, "model": self.model, "store": False}
+        if self.model == "gpt-6-luna":
+            body.setdefault("reasoning", {"effort": "none"})
         req = urllib.request.Request("https://api.openai.com/v1/responses", data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
             headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as response:
                 data = response.read(4_000_001)
         except urllib.error.HTTPError as exc:
-            raise RuntimeError(f"OpenAI API 요청 실패 (HTTP {exc.code}). 키·모델 권한·사용한도를 확인하십시오.") from None
+            raise RuntimeError(safe_api_error(exc)) from None
         if len(data) > 4_000_000:
             raise ValueError("AI 응답 크기 제한 초과")
         payload = json.loads(data)

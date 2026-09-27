@@ -117,7 +117,8 @@ def extract_facts_from_text(
     default_currency: str = "미확인",
     default_scope: str = "연결",
 ) -> tuple[list[FinancialFact], list[str], dict]:
-    clipped_text = text[:60_000]
+    from .document_selection import select_financial_text
+    clipped_text, selection_warnings = select_financial_text(text)
     payload = {
         "document_text": clipped_text,
         "required_items": [
@@ -139,8 +140,7 @@ evidence_quote}], warnings:[string]}이다. 근거 문구가 없는 값은 제�
     rows = result.get("facts", [])
     if not isinstance(warnings, list) or any(not isinstance(w, str) for w in warnings) or not isinstance(rows, list):
         raise ValueError("AI 추출 결과 형식이 올바르지 않습니다.")
-    if len(text) > len(clipped_text):
-        warnings.append("비용 제한으로 문서 앞 60,000자만 추출했습니다. 뒤쪽 재무제표 누락 가능성이 있어 추가 확인이 필요합니다.")
+    warnings.extend(selection_warnings)
     for row in rows:
         if not isinstance(row, dict):
             warnings.append("잘못된 형식의 추출 후보를 제외했습니다.")

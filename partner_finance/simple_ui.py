@@ -97,6 +97,8 @@ def render(store, owner, secret, panels):
         recalculate(project)
         persist()
     if not project.facts:
+        if project.sources:
+            st.warning("재무수치 추출 0건: 원문만 저장된 상태입니다. 아직 평가표·보고서를 만들 수 없습니다. 같은 파일을 다시 선택해 분석하거나 재무제표가 포함된 다른 파일을 올려 주세요.")
         st.info("SEC·DART 밖의 기업은 공개 재무보고서를 넣어 주세요. 뉴스·사업정보 조사는 아래에서 별도로 할 수 있습니다.")
         upload = st.file_uploader("재무보고서 파일", type=["pdf", "xlsx", "csv"])
         st.caption("공개자료는 개인 OpenAI API로 정리하고, 내부 판단은 사내 Claude에서 수행합니다. 원문과 내부자료의 외부 전송 정책을 준수하십시오.")
@@ -109,8 +111,9 @@ def render(store, owner, secret, panels):
                 from .ai import extract_facts_from_text
                 with st.spinner("보고서 읽기 → 수치 추출 → 검증 중입니다..."):
                     source, _ = store.save_source_bytes(project.project_id, upload.name, upload.getvalue(), upload.type or "")
-                    if any(s.sha256 == source.sha256 for s in project.sources):
-                        raise ValueError("이미 등록된 자료입니다. 아래 자료 수정 메뉴에서 확인하십시오.")
+                    existing_source = next((s for s in project.sources if s.sha256 == source.sha256), None)
+                    if existing_source:
+                        source = existing_source
                     facts, warnings, text = parse_uploaded_file(upload.name, upload.getvalue(), project.entity.entity_id, source)
                     if text:
                         provider = OpenAIProvider(secret("OPENAI_API_KEY"), secret("OPENAI_MODEL", DEFAULT_OPENAI_MODEL))
@@ -121,11 +124,14 @@ def render(store, owner, secret, panels):
                         else:
                             warnings.append("PDF 자동 수치 추출은 OPENAI_API_KEY 설정이 필요합니다. 현재 원문만 저장했습니다.")
                         st.session_state.document_texts[source.source_id] = text
-                    project.sources.append(source)
+                    if not existing_source:
+                        project.sources.append(source)
                     project.facts.extend(facts)
                     project.narrative["collection_warnings"] = warnings
                     if facts:
                         recalculate(project)
+                    else:
+                        warnings.append("재무수치 0건입니다. 손익계산서·재무상태표·현금흐름표가 포함된 문서인지 확인하십시오. 요약 프레젠테이션만으로는 평가가 어려울 수 있습니다.")
                     persist()
                 st.rerun()
             except Exception as exc:

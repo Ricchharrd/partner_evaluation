@@ -168,7 +168,7 @@ def parse_xlsx(content: bytes, entity_id: str, source: SourceDocument) -> tuple[
     return facts, warnings if warnings or facts else ["처리 가능한 재무표를 찾지 못했습니다."]
 
 
-def extract_pdf_text(content: bytes, max_pages: int = 300) -> tuple[str, list[str]]:
+def extract_pdf_text(content: bytes, max_pages: int = 1000) -> tuple[str, list[str]]:
     from pypdf import PdfReader
 
     reader = PdfReader(BytesIO(content))
@@ -182,7 +182,7 @@ def extract_pdf_text(content: bytes, max_pages: int = 300) -> tuple[str, list[st
     if average_chars < 80:
         warnings.append("스캔 PDF로 추정됩니다. 이 환경에는 OCR/비전 추출이 연결되어 있지 않아 수동 입력이 필요합니다.")
     else:
-        warnings.append("텍스트 PDF를 인식했습니다. 숫자 자동 추출은 Claude API를 명시적으로 실행하거나 표준 CSV/XLSX를 사용하십시오.")
+        warnings.append("PDF 텍스트를 읽었습니다. 재무수치 추출 및 원문 대조는 별도 단계이며, 스캔 이미지의 숫자는 누락될 수 있습니다.")
     return text, warnings
 
 

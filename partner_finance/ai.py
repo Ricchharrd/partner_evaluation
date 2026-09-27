@@ -118,6 +118,7 @@ def extract_facts_from_text(
     default_scope: str = "연결",
 ) -> tuple[list[FinancialFact], list[str], dict]:
     from .document_selection import select_financial_text
+    from .numeric_input import parse_number
     clipped_text, selection_warnings = select_financial_text(text)
     payload = {
         "document_text": clipped_text,
@@ -133,23 +134,34 @@ def extract_facts_from_text(
 추론하거나 누락값을 0으로 채우지 마라. 연결/별도, 연도, 통화, 원문 단위와 페이지 표식을 보존하라.
 반드시 JSON 객체만 반환한다. 형식은 {facts:[{fiscal_year, standard_item, original_label,
 original_value, unit_multiplier, currency, reporting_scope, period_start, period_end, source_locator,
-evidence_quote}], warnings:[string]}이다. 근거 문구가 없는 값은 제외한다."""
+evidence_quote}], warnings:[string]}이다. facts는 반드시 위 키를 사용하는 객체 배열이다.
+original_value와 unit_multiplier는 쉼표나 통화기호 없는 JSON 숫자로 반환하라.
+예: 원문 20,236 (Million Euro)는 original_value:20236, unit_multiplier:1000000, currency:"EUR"이다.
+fiscal_year는 FY 문구 없이 정수 연도다. evidence_quote는 원문에서 연속된 문구를 그대로 복사하라.
+순금융손익을 이자비용으로, 순차입금을 총금융부채로 대체하지 마라.
+APM 또는 회사 정의 현금흐름을 정식 재무제표의 영업/투자/재무 현금흐름이나 CAPEX로 매핑하지 마라.
+해당 정의가 원문에 있으면 warnings에 한계를 적어라. 근거 문구가 없는 값은 제외한다."""
     result, meta = provider.generate_json(system, payload, max_tokens=5000)
     facts = []
     warnings = result.get("warnings") or []
-    rows = result.get("facts", [])
+    rows = result.get("facts")
     if not isinstance(warnings, list) or any(not isinstance(w, str) for w in warnings) or not isinstance(rows, list):
         raise ValueError("AI 추출 결과 형식이 올바르지 않습니다.")
     warnings.extend(selection_warnings)
+    rejected_numeric = 0
     for row in rows:
         if not isinstance(row, dict):
             warnings.append("잘못된 형식의 추출 후보를 제외했습니다.")
             continue
         try:
-            original = float(row["original_value"])
-            multiplier = float(row.get("unit_multiplier", 1))
-            year = int(row["fiscal_year"])
+            original = parse_number(row["original_value"])
+            multiplier = parse_number(row["unit_multiplier"])
+            parsed_year = parse_number(row["fiscal_year"])
+            if not math.isfinite(parsed_year) or not parsed_year.is_integer():
+                raise ValueError("Invalid fiscal year")
+            year = int(parsed_year)
         except (KeyError, TypeError, ValueError):
+            rejected_numeric += 1
             continue
         quote = str(row.get("evidence_quote") or "").strip()
         if not all(math.isfinite(v) for v in (original, multiplier, original * multiplier)) or multiplier <= 0 or not 1900 <= year <= 2100:
@@ -177,4 +189,7 @@ evidence_quote}], warnings:[string]}이다. 근거 문구가 없는 값은 제�
                 validation_status="AI 추출-검토 필요",
             )
         )
+    if rejected_numeric:
+        warnings.append(f"AI 후보 중 {rejected_numeric}건은 연도·숫자·단위 형식을 확인하지 못해 제외했습니다. 누락값을 0으로 채우지 않았습니다.")
+    warnings.append(f"추출 결과: AI 후보 {len(rows)}건 / 반영 {len(facts)}건 / 제외 {len(rows) - len(facts)}건. 반영값도 원문 검토가 필요합니다.")
     return facts, warnings, meta

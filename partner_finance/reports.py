@@ -104,6 +104,8 @@ def build_excel(project: AnalysisProject) -> bytes:
         ("검토 기록", project.narrative.get("audit_log", [])),
         ("환율 근거", project.narrative.get("fx_display", [])),
         ("웹 조사", project.narrative.get("research_briefs", [])),
+        ("HITL 검토", project.narrative.get("hitl_review_history", [])),
+        ("외부전송 승인", project.narrative.get("hitl_approvals", [])),
     ]:
         _write_rows(wb.create_sheet(name), rows)
 
@@ -126,6 +128,7 @@ def _add_bullets(document, values: Iterable[str]):
 
 
 def build_word(project: AnalysisProject) -> bytes:
+    from .hitl import current_review
     from docx import Document
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.oxml.ns import qn
@@ -143,7 +146,12 @@ def build_word(project: AnalysisProject) -> bytes:
     document.add_paragraph(f"국가 / 업종: {project.entity.country or '미확인'} / {project.entity.industry or '미확인'}")
     document.add_paragraph(f"분석 기준: {project.entity.reporting_scope}, {project.entity.accounting_standard}, 최종수정 {project.updated_at}")
     document.add_paragraph("본 보고서는 예비 검토 자료이며 정식 신용평가가 아닙니다. 원문 및 인적 검토가 필요합니다.")
-    document.add_paragraph(f"검토 상태: {project.status} | 검토자: {project.narrative.get('review', {}).get('reviewer', '미검토')}")
+    document.add_paragraph("HITL 사전 검토: " + ("현재 자료 확인 기록 있음" if current_review(project) else "미완료·재확인 필요 / 승인본 아님"))
+    human_review = project.narrative.get("hitl_review", {})
+    document.add_paragraph(f"확인자: {human_review.get('reviewer', '미확인')} / 미해결 사항·조치: {human_review.get('note', '미기록')}")
+    status = project.status if current_review(project) else "미검토·재확인 필요"
+    reviewer = project.narrative.get('review', {}).get('reviewer', '미검토') if current_review(project) else '미검토'
+    document.add_paragraph(f"검토 상태: {status} | 검토자: {reviewer}")
     document.add_heading("재무역량 평가표 (잠정)", level=1)
     rating_rows = assessment_rows(project)
     if rating_rows:
@@ -183,7 +191,8 @@ def build_word(project: AnalysisProject) -> bytes:
         for index, year in enumerate(years, start=1):
             fact = selected.get((year, item))
             value = fact.effective_value if fact else None
-            _set_cell_text(cells[index], f"{value:,.0f} {fact.currency}" if value is not None and fact else "미확인")
+            blocked = any(v.severity == "오류" and v.fiscal_year in (None, year) and (not v.item_keys or item in v.item_keys) for v in project.validations)
+            _set_cell_text(cells[index], "검증 오류·확인 필요" if blocked else f"{value:,.0f} {fact.currency}" if value is not None and fact else "미확인")
 
     document.add_heading("3. 재무비율 및 변동 분석", level=1)
     latest_ratios = [row for row in project.ratios if row.fiscal_year in years]

@@ -119,6 +119,7 @@ def extract_facts_from_text(
 ) -> tuple[list[FinancialFact], list[str], dict]:
     from .document_selection import select_financial_text
     from .numeric_input import parse_number
+    from .account_guards import mapping_problem, normalize_scope
     clipped_text, selection_warnings = select_financial_text(text)
     payload = {
         "document_text": clipped_text,
@@ -131,7 +132,10 @@ def extract_facts_from_text(
         "default_scope": default_scope,
     }
     system = """재무보고서 텍스트에서 명시적으로 확인되는 값만 추출하라.
-추론하거나 누락값을 0으로 채우지 마라. 연결/별도, 연도, 통화, 원문 단위와 페이지 표식을 보존하라.
+추론하거나 누락값을 0으로 채우지 마라. 표의 당기와 전기 비교열을 모두 추출하라.
+연결/별도, 연도, 통화, 원문 단위와 페이지 표식을 보존하라. reporting_scope는 연결 또는 별도 또는 미확인이다.
+net_income은 비지배지분 차감 전 연결 전체 세후이익이다. 귀속 순이익과 구분하라.
+original_label은 원문 행 제목 그대로다. TOTAL LIABILITIES AND EQUITY는 total_liabilities가 아니다.
 반드시 JSON 객체만 반환한다. 형식은 {facts:[{fiscal_year, standard_item, original_label,
 original_value, unit_multiplier, currency, reporting_scope, period_start, period_end, source_locator,
 evidence_quote}], warnings:[string]}이다. facts는 반드시 위 키를 사용하는 객체 배열이다.
@@ -164,6 +168,10 @@ APM 또는 회사 정의 현금흐름을 정식 재무제표의 영업/투자/�
             rejected_numeric += 1
             continue
         quote = str(row.get("evidence_quote") or "").strip()
+        problem = mapping_problem(row.get("standard_item"), str(row.get("original_label") or ""), quote, text)
+        if problem:
+            warnings.append(problem)
+            continue
         if not all(math.isfinite(v) for v in (original, multiplier, original * multiplier)) or multiplier <= 0 or not 1900 <= year <= 2100:
             warnings.append("유효하지 않은 수치 또는 단위 후보를 제외했습니다.")
             continue
@@ -182,7 +190,7 @@ APM 또는 회사 정의 현금흐름을 정식 재무제표의 영업/투자/�
                 unit_multiplier=multiplier,
                 period_start=str(row.get("period_start") or ""),
                 period_end=str(row.get("period_end") or ""),
-                reporting_scope=str(row.get("reporting_scope") or default_scope),
+                reporting_scope=normalize_scope(row.get("reporting_scope") or "미확인"),
                 source_id=source.source_id,
                 source_locator=str(row.get("source_locator") or "위치 미확인") + " | 근거: " + quote,
                 extraction_method=f"AI 구조화 추출 ({meta['model']})",
@@ -192,4 +200,6 @@ APM 또는 회사 정의 현금흐름을 정식 재무제표의 영업/투자/�
     if rejected_numeric:
         warnings.append(f"AI 후보 중 {rejected_numeric}건은 연도·숫자·단위 형식을 확인하지 못해 제외했습니다. 누락값을 0으로 채우지 않았습니다.")
     warnings.append(f"추출 결과: AI 후보 {len(rows)}건 / 반영 {len(facts)}건 / 제외 {len(rows) - len(facts)}건. 반영값도 원문 검토가 필요합니다.")
+    if len({f.fiscal_year for f in facts}) < 2:
+        warnings.append("비교연도 미확인: 원문 전기 비교열 누락 여부를 확인하십시오. 현재 자료만으로 3개년 분석을 완성하지 않습니다.")
     return facts, warnings, meta

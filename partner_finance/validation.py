@@ -4,6 +4,7 @@ from collections import defaultdict
 
 from .analysis import effective_fact_map
 from .schema import FinancialFact, ValidationIssue
+from .account_guards import mapping_problem, normalize_scope
 
 
 REQUIRED_ITEMS = ["revenue", "operating_income", "net_income", "total_assets", "total_liabilities", "total_equity"]
@@ -17,6 +18,10 @@ def _tolerance(values: list[float], multipliers: list[float]) -> float:
 
 def validate_facts(facts: list[FinancialFact]) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
+    for fact in facts:
+        problem = mapping_problem(fact.standard_item, fact.original_label, fact.source_locator)
+        if problem:
+            issues.append(ValidationIssue("ACCOUNT_MAPPING", "오류", fact.fiscal_year, problem, [fact.standard_item], "오류"))
     selected = effective_fact_map(facts)
     years = sorted({fact.fiscal_year for fact in facts})
 
@@ -36,13 +41,14 @@ def validate_facts(facts: list[FinancialFact]) -> list[ValidationIssue]:
                 issues.append(ValidationIssue("SOURCE_CONFLICT", "경고", year, f"{key} 값이 출처 또는 버전별로 충돌합니다.", [key]))
 
         currencies = {fact.currency for fact in year_facts if fact.currency}
-        scopes = {fact.reporting_scope for fact in year_facts if fact.reporting_scope}
-        periods = {(fact.period_start, fact.period_end) for fact in year_facts if fact.period_end}
+        scopes = {normalize_scope(fact.reporting_scope) for fact in year_facts if fact.reporting_scope}
+        ends = {fact.period_end for fact in year_facts if fact.period_end}
+        starts = {fact.period_start for fact in year_facts if fact.period_start and fact.period_start != fact.period_end}
         if len(currencies) > 1:
             issues.append(ValidationIssue("MIXED_CURRENCY", "오류", year, "동일 연도에 여러 통화가 혼합되어 금액 비교를 보류합니다.", status="오류"))
         if len(scopes) > 1:
             issues.append(ValidationIssue("MIXED_SCOPE", "경고", year, "연결·별도 범위가 혼합되어 있습니다."))
-        if len(periods) > 1:
+        if len(ends) > 1 or len(starts) > 1:
             issues.append(ValidationIssue("MIXED_PERIOD", "경고", year, "동일 연도 값의 회계기간이 서로 다릅니다."))
 
         def fact_value(key):

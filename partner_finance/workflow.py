@@ -9,11 +9,12 @@ from .policy import evaluate_company_policy
 from .schema import utc_now, ValidationIssue
 from .validation import validate_facts
 from .legacy_sec.sec_fx import HARDCODED_USD_KRW_RATES
+from .account_guards import normalize_scope
 
 
 def input_digest(project):
     payload = {"entity": project.entity.__dict__, "facts": [f.__dict__ for f in project.facts],
-               "sources": [s.__dict__ for s in project.sources], "versions": project.versions}
+               "sources": [s.__dict__ for s in project.sources], "versions": project.versions, "guard_version": 2}
     return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
@@ -32,6 +33,8 @@ def invalidate(project):
 
 def recalculate(project):
     invalidate(project)
+    for fact in project.facts:
+        fact.reporting_scope = normalize_scope(fact.reporting_scope)
     project.validations = validate_facts(project.facts)
     for year, reason in context_blocks(project.facts).items():
         project.validations.append(ValidationIssue("CONTEXT_BLOCK", "오류", year, reason))
@@ -71,12 +74,15 @@ def is_current(project):
 
 
 def finalize(project, reviewer, note):
+    from .hitl import current_review
     if not reviewer.strip() or not note.strip():
         raise ValueError("검토자와 검토의견을 입력하십시오.")
     if not is_current(project) or not project.facts:
         raise ValueError("최신 입력으로 검증·계산을 먼저 실행하십시오.")
     if any(issue.severity == "오류" for issue in project.validations):
         raise ValueError("오류를 해소하기 전에는 검토를 완료할 수 없습니다.")
+    if not current_review(project):
+        raise ValueError("사람의 검토에서 대상·수치·예외·사업정보 확인을 먼저 기록하십시오. 자료 변경 후에는 재확인이 필요합니다.")
     review = {"at": utc_now(), "reviewer": reviewer.strip(), "note": note.strip(), "input_digest": input_digest(project)}
     project.narrative["review"] = review
     project.narrative.setdefault("assessment_history", []).append({

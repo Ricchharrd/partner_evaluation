@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
 
 from partner_finance.ai import extract_facts_from_text, generate_project_narrative
 from partner_finance.openai_provider import OpenAIProvider, DEFAULT_OPENAI_MODEL
+from partner_finance.hitl import authorize_request
 from partner_finance.analysis import build_basic_narrative, calculate_ratios, ratio_rows
 from partner_finance.dart_adapter import collect_dart_project, search_dart_companies
 from partner_finance.ingest import download_public_document, parse_uploaded_file, sample_csv_bytes
@@ -356,13 +357,13 @@ def ai_report_panel(project: AnalysisProject):
     st.subheader("4. AI 해석 및 보고서")
     api_key = secret("OPENAI_API_KEY")
     model = secret("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
-    provider = OpenAIProvider(api_key=api_key, model=model)
-    permitted = st.checkbox("AI 전송 대상 자료·재무값·근거가 공개자료이거나 개인 OpenAI API 전송을 승인받았습니다.")
+    provider = OpenAIProvider(api_key=api_key, model=model, approval=lambda body: authorize_request(project, body))
+    permitted = st.checkbox("AI 전송 대상 자료·재무값·근거는 모두 공개자료이며 내부정보가 포함되지 않았습니다.")
     if st.session_state.document_texts:
-        st.caption(f"AI 추출 대기 문서 {len(st.session_state.document_texts)}건")
+        st.caption(f"AI 추출 대기 문서 {len(st.session_state.document_texts)}건 · 승인 범위를 명확히 하기 위해 한 번에 1건씩 처리합니다.")
         if st.button("문서 텍스트에서 재무값 AI 추출", disabled=not provider.available or not permitted):
             added = 0
-            for source_id, text in list(st.session_state.document_texts.items()):
+            for source_id, text in list(st.session_state.document_texts.items())[:1]:
                 source = next((item for item in project.sources if item.source_id == source_id), None)
                 if not source:
                     continue
@@ -370,6 +371,8 @@ def ai_report_panel(project: AnalysisProject):
                     facts, warnings, _ = extract_facts_from_text(text, project.entity.entity_id, source, provider, default_scope=project.entity.reporting_scope)
                     project.facts.extend(facts)
                     added += len(facts)
+                    if facts:
+                        st.session_state.document_texts.pop(source_id, None)
                     for warning in warnings:
                         add_message("warning", warning)
                 except Exception as exc:
@@ -495,7 +498,10 @@ def main():
         unsafe_allow_html=True,
     )
     st.title("파트너 살펴보기")
-    st.caption("기업 찾기 → 3개년 평가 확인 → 보고서 받기")
+    st.caption("공개자료 조사·분석 → 사내 Claude 전달 → 내부자료 결합·최종 검토")
+    st.info("이 웹서비스에는 공개자료만 입력하십시오. 비공개 재무제표·내부 검토의견은 사내 Claude에서만 처리합니다. 수정된 평가기준은 웹에서도 사용합니다.")
+    if not st.checkbox("기업명·검색어·파일·메모를 포함해 이 웹서비스에는 공개 가능한 정보만 입력하겠습니다.", key="public_workspace_ack"):
+        st.stop()
     init_state()
     if secret("SEC_USER_AGENT"):
         os.environ["SEC_USER_AGENT"] = secret("SEC_USER_AGENT")

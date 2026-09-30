@@ -14,6 +14,8 @@ PROMPT = "파트너 재무검토 스킬로 01_review_brief.md를 먼저 읽으�
 
 def packet_content(project):
     from .hitl import current_review
+    reviewed = current_review(project)
+    review_record = deepcopy(project.narrative.get("hitl_review", {}))
     news_only = project.narrative.get("analysis_route") == "news_only" or not project.facts
     if not news_only and not is_current(project):
         raise ValueError("최신 자료로 계산한 뒤 전달자료를 생성하십시오.")
@@ -63,8 +65,8 @@ def packet_content(project):
             brief.append(section["text"][:1000])
             brief.extend("출처: " + c["url"] for c in section.get("citations", [])[:5])
     brief += ["요약은 최근 조사 2건·각 3문단·문단당 1,000자로 제한합니다. 전체 근거는 JSON을 필요할 때만 확인하십시오.",
-              "## HITL 검토 상태", "사전 검토: " + ("현재 자료에 대한 사람의 확인 기록 있음" if current_review(project) else "미완료 또는 자료 변경으로 재확인 필요"),
-              json.dumps(project.narrative.get("hitl_review", {}), ensure_ascii=False),
+              "## HITL 검토 상태", "사전 검토: " + ("현재 자료에 대한 사람의 확인 기록 있음" if reviewed else "미완료 또는 자료 변경으로 재확인 필요"),
+              json.dumps(review_record, ensure_ascii=False),
               "미해결 사항이 결론에 영향을 주면 중요한 질문 최대 3개를 제시하고 답변을 기다리십시오. 추가 대량 처리·외부 검색·외부 전송 전에 비용·보안 확인을 받으십시오. 스스로 최종 승인하지 마십시오.",
               "## Claude 검토 요청", PROMPT]
     evidence = {
@@ -79,7 +81,7 @@ def packet_content(project):
         "policy_evaluation": project.narrative.get("policy_evaluation", []), "fx": project.narrative.get("fx_display", []),
         "versions": project.versions, "research_briefs": project.narrative.get("research_briefs", []),
         "business_evidence": project.narrative.get("business_evidence", []), "updates": project.narrative.get("partner_updates", []),
-        "hitl": {"review_current": current_review(project), "review": project.narrative.get("hitl_review", {}), "history": project.narrative.get("hitl_review_history", [])},
+        "hitl": {"review_current": reviewed, "review": review_record, "history": project.narrative.get("hitl_review_history", [])},
     }
     return "\n\n".join(brief).encode("utf-8"), json.dumps(evidence, ensure_ascii=False, indent=2, allow_nan=False).encode("utf-8")
 

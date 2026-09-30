@@ -11,6 +11,10 @@ def normalize_scope(value):
 
 def mapping_problem(item, label, evidence="", document=""):
     label = re.sub(r"\s+", " ", label.lower()).strip()
+    if item in {"revenue", "operating_income", "net_income"}:
+        header = re.sub(r"\s+", " ", document.lower())[:800]
+        if any(t in label + " " + evidence.lower() for t in ("adjusted", "reclassified", "조정")) or "adjusted reclassified statement" in header:
+            return "조정·재분류 손익은 정식 재무제표 손익으로 사용하지 않습니다."
     if item == "total_liabilities" and ("equity" in label or "부채와 자본" in label or "부채 및 자본" in label):
         return "부채·자본 합계를 부채총계로 사용할 수 없습니다."
     if item == "net_income" and any(t in label for t in ("attributable", "지배", "parent")):

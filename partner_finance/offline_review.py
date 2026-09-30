@@ -1,6 +1,8 @@
 """Deterministic internal calculator. No network, API, or external storage."""
 from dataclasses import asdict
 from math import isfinite
+import hashlib
+import json
 
 from .schema import AnalysisProject, EntityProfile, FinancialFact, STANDARD_ITEMS
 from .analysis import calculate_ratios
@@ -15,12 +17,19 @@ def number(value, label):
     return value
 
 
+def approval_digest(payload):
+    data = {k: v for k, v in payload.items() if k != "human_review"}
+    return hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+
+
 def calculate_internal(payload):
     if payload.get("schema") != "internal-financial-input/1.0":
         raise ValueError("Unsupported input schema")
     review = payload.get("human_review", {})
     if review.get("confirmed") is not True or not review.get("reviewer", "").strip() or not review.get("note", "").strip():
         raise ValueError("Human confirmation of extracted facts is required before calculation")
+    if review.get("input_digest") != approval_digest(payload):
+        raise ValueError("Human review is missing or stale: show the current facts and obtain new confirmation")
     entity = EntityProfile(**payload["entity"])
     if not entity.legal_name.strip():
         raise ValueError("Legal entity required")

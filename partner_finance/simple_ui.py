@@ -1,4 +1,5 @@
 from datetime import date
+from pathlib import Path
 import streamlit as st
 
 from .schema import AnalysisProject, EntityProfile
@@ -26,7 +27,7 @@ def render(store, owner, secret, panels):
     if project is None:
         st.subheader("어느 기업을 살펴볼까요?")
         with st.form("quick_search"):
-            query = st.text_input("기업명 또는 종목코드", placeholder="예: Apple, AAPL, 삼성전자")
+            query = st.text_input("기업명 또는 종목코드", placeholder="예: Acciona, Webuild, 현대건설")
             submitted = st.form_submit_button("기업 찾기", type="primary")
         if submitted:
             st.session_state.pop("simple_matches", None)
@@ -105,6 +106,14 @@ def render(store, owner, secret, panels):
         project.narrative.pop("review", None)
         persist()
     advanced = st.toggle("상세 편집 도구", value=False, key=f"advanced_{project.project_id}")
+    st.caption("2026.09.30 업데이트 · 절약 모드: 재무제표 우선 선택 · 같은 추출 결과 재사용 · 계산/문서 출력은 API 없이 처리")
+    with st.expander("HITL 진행 상태와 AI 사용량"):
+        st.write("H1 외부 전송 전: 공개성·범위·비용 승인 / H2 결과 확인: 원문·예외 검토 / H3 최종 의견: 사내 승인")
+        st.write("현재 H2 확인: " + ("완료" if current_review(project) else "미완료 또는 자료 변경으로 재확인 필요"))
+        usage = project.narrative.get("api_usage", [])
+        st.write(f"재무 추출 기록 {len(usage)}건 / 저장 결과 재사용 {sum(bool(m.get('cache_hit')) for m in usage)}건")
+        if usage:
+            st.json({"마지막 처리": usage[-1], "안내": "usage는 API 반환값이며 재사용 시 신규 과금 사용량은 없습니다. 청구액은 별도 확인합니다."})
     if project.facts and not is_current(project):
         recalculate(project)
         persist()
@@ -117,6 +126,7 @@ def render(store, owner, secret, panels):
         public_file = st.checkbox("공개된 재무보고서입니다. 비공개·거래처 제공 자료는 업로드하지 않습니다.")
         upload = st.file_uploader("공개 재무보고서 파일", type=["pdf", "xlsx", "csv"], disabled=not public_file)
         replace_confirmed = st.checkbox("같은 파일 재분석 시 기존 추출값·수정값을 이력에 보존하고 새 결과로 교체합니다.") if project.facts else False
+        force_refresh = st.checkbox("저장 결과 대신 AI 새 추출 요청 (추가 비용·새 승인 필요)", value=False)
         st.caption("공개자료는 개인 OpenAI API로 정리하고, 내부 판단은 사내 Claude에서 수행합니다. 원문과 내부자료의 외부 전송 정책을 준수하십시오.")
         permitted = public_file
         if upload and upload.name.lower().endswith('.pdf') and secret("OPENAI_API_KEY"):
@@ -136,12 +146,17 @@ def render(store, owner, secret, panels):
                     if text:
                         provider = OpenAIProvider(secret("OPENAI_API_KEY"), secret("OPENAI_MODEL", DEFAULT_OPENAI_MODEL), approval=lambda body: authorize_request(project, body))
                         if provider.available:
-                            facts, ai_warnings, meta = extract_facts_from_text(text, project.entity.entity_id, source, provider)
+                            facts, ai_warnings, meta = extract_facts_from_text(text, project.entity.entity_id, source, provider,
+                                default_scope=project.entity.reporting_scope,
+                                cache=project.narrative.setdefault("extraction_cache", {}), force_refresh=force_refresh)
                             project.narrative.setdefault("api_usage", []).append(meta)
                             warnings.extend(ai_warnings)
                         else:
                             warnings.append("PDF 자동 수치 추출은 OPENAI_API_KEY 설정이 필요합니다. 현재 원문만 저장했습니다.")
-                        st.session_state.document_texts[source.source_id] = text
+                        if facts:
+                            st.session_state.document_texts.pop(source.source_id, None)
+                        else:
+                            st.session_state.document_texts[source.source_id] = text
                     if existing_source and facts:
                         previous = [f for f in project.facts if f.source_id == source.source_id]
                         if previous:
@@ -224,6 +239,9 @@ def render(store, owner, secret, panels):
         st.download_button("사내 Claude 전달자료 받기", build_handoff(project), "claude_review_packet.zip", "application/zip", width="stretch")
         with st.expander("사내 Claude로 전달하는 방법"):
             st.write("전용 스킬과 전달자료를 사내 Claude에서 사용하십시오. 비공개 재무제표는 Claude에만 별도 첨부합니다. 내부 계산결과·메모·최종 보고서는 이 웹에 다시 올리지 않습니다. 스킬 계산은 사내 코드 실행 기능이 허용된 경우에만 가능합니다.")
+            skill_zip = Path(__file__).resolve().parents[1] / "deliverables" / "partner-review-skill.zip"
+            if skill_zip.is_file():
+                st.download_button("최신 사내 Claude 스킬 받기 · 재등록 필요", skill_zip.read_bytes(), "partner-review-skill.zip", "application/zip")
             brief, _ = packet_content(project)
             st.download_button("요약 파일만 받기 (Markdown)", brief, "01_review_brief.md", "text/markdown")
     if news_only:

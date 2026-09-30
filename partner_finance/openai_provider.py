@@ -67,6 +67,8 @@ class OpenAIProvider:
         if self.model == "gpt-6-luna":
             body.setdefault("reasoning", {"effort": "none"})
         from .hitl import preflight
+        if preflight(body)["over_limit"]:
+            raise ValueError("전송 규모 한도를 초과했습니다. 입력 범위를 줄이십시오. 자동 재시도·분할 호출하지 않습니다.")
         if preflight(body)["blocked"]:
             raise ValueError("보안 차단: 전송 내용에서 인증정보 의심 문자열을 제거하십시오.")
         if preflight(body)["sensitive"]:

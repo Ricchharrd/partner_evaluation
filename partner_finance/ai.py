@@ -5,6 +5,8 @@ import hashlib
 import json
 import os
 import math
+import re
+from copy import deepcopy
 import urllib.request
 
 from .schema import AnalysisProject, FinancialFact, SourceDocument, STANDARD_ITEMS
@@ -24,10 +26,11 @@ class AIProvider(ABC):
 class ClaudeProvider(AIProvider):
     name = "claude"
 
-    def __init__(self, api_key: str | None = None, model: str | None = None, timeout: int = 90):
+    def __init__(self, api_key: str | None = None, model: str | None = None, timeout: int = 90, approval=None):
         self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY", "")
         self.model = model or os.getenv("ANTHROPIC_MODEL", DEFAULT_CLAUDE_MODEL)
         self.timeout = timeout
+        self.approval = approval
 
     @property
     def available(self) -> bool:
@@ -45,6 +48,14 @@ class ClaudeProvider(AIProvider):
             },
             ensure_ascii=False,
         ).encode("utf-8")
+        from .hitl import preflight
+        request_body = json.loads(body)
+        info = preflight({**request_body, "max_output_tokens": max_tokens})
+        if info["blocked"] or info["sensitive"] or info["over_limit"]:
+            raise ValueError("보안 또는 처리 규모 제한으로 외부 호출을 중단했습니다.")
+        if self.approval is None:
+            raise ValueError("외부 API 호출에는 요청별 사람의 승인이 필요합니다.")
+        self.approval(request_body)
         request = urllib.request.Request(
             "https://api.anthropic.com/v1/messages",
             data=body,
@@ -116,8 +127,10 @@ def extract_facts_from_text(
     provider: AIProvider,
     default_currency: str = "미확인",
     default_scope: str = "연결",
+    cache: dict | None = None,
+    force_refresh: bool = False,
 ) -> tuple[list[FinancialFact], list[str], dict]:
-    from .document_selection import select_financial_text
+    from .document_selection import select_financial_text, SELECTION_VERSION
     from .numeric_input import parse_number
     from .account_guards import mapping_problem, normalize_scope
     clipped_text, selection_warnings = select_financial_text(text)
@@ -144,8 +157,23 @@ original_value와 unit_multiplier는 쉼표나 통화기호 없는 JSON 숫자�
 fiscal_year는 FY 문구 없이 정수 연도다. evidence_quote는 원문에서 연속된 문구를 그대로 복사하라.
 순금융손익을 이자비용으로, 순차입금을 총금융부채로 대체하지 마라.
 APM 또는 회사 정의 현금흐름을 정식 재무제표의 영업/투자/재무 현금흐름이나 CAPEX로 매핑하지 마라.
+조정(adjusted)·재분류(reclassified) 손익을 정식 연결 손익보다 우선하지 마라.
+관계자 거래(of which: related parties) 열을 해당 연도의 총액으로 사용하지 마라.
+요청 default_scope와 다른 범위의 값은 제외하라. 범위가 불명확하면 미확인으로 남겨라.
 해당 정의가 원문에 있으면 warnings에 한계를 적어라. 근거 문구가 없는 값은 제외한다."""
-    result, meta = provider.generate_json(system, payload, max_tokens=5000)
+    cache_key = hashlib.sha256(json.dumps({"text_hash": hashlib.sha256(text.encode()).hexdigest(),
+        "payload": payload, "system": system, "selection": SELECTION_VERSION,
+        "provider": getattr(provider, "name", ""), "model": getattr(provider, "model", ""),
+        "entity": entity_id, "source": source.source_id}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    cached = cache.get(cache_key) if cache is not None and not force_refresh else None
+    if cached:
+        result, meta = deepcopy(cached["result"]), deepcopy(cached["meta"])
+        meta.update(cache_hit=True, original_usage=meta.get("usage", {}), usage={})
+    else:
+        result, meta = provider.generate_json(system, payload, max_tokens=5000)
+        meta = {**meta, "cache_hit": False}
+    meta.update(original_characters=len(text), selected_characters=len(clipped_text), selection_version=SELECTION_VERSION)
+    raw_result = deepcopy(result)
     facts = []
     warnings = result.get("warnings") or []
     rows = result.get("facts")
@@ -168,9 +196,22 @@ APM 또는 회사 정의 현금흐름을 정식 재무제표의 영업/투자/�
             rejected_numeric += 1
             continue
         quote = str(row.get("evidence_quote") or "").strip()
-        problem = mapping_problem(row.get("standard_item"), str(row.get("original_label") or ""), quote, text)
+        # APM definitions elsewhere must not invalidate statutory statement rows.
+        page_match = re.search(r"(?:PAGE|page|p\.)\s*(\d+)", str(row.get("source_locator", "")), re.I)
+        page_context = ""
+        if page_match:
+            match = re.search(r"\[PAGE " + page_match.group(1) + r"\](.*?)(?=\[PAGE \d+\]|\Z)", clipped_text, re.S)
+            page_context = match.group(1) if match else ""
+            if not match or " ".join(quote.split()) not in " ".join(page_context.split()):
+                warnings.append("페이지와 근거 문구가 일치하지 않는 후보를 제외했습니다.")
+                continue
+        problem = mapping_problem(row.get("standard_item"), str(row.get("original_label") or ""), quote, page_context)
         if problem:
             warnings.append(problem)
+            continue
+        scope = normalize_scope(row.get("reporting_scope") or "미확인")
+        if scope not in {normalize_scope(default_scope), "미확인"}:
+            warnings.append("요청한 연결/별도 범위와 다른 후보를 제외했습니다.")
             continue
         if not all(math.isfinite(v) for v in (original, multiplier, original * multiplier)) or multiplier <= 0 or not 1900 <= year <= 2100:
             warnings.append("유효하지 않은 수치 또는 단위 후보를 제외했습니다.")
@@ -202,4 +243,10 @@ APM 또는 회사 정의 현금흐름을 정식 재무제표의 영업/투자/�
     warnings.append(f"추출 결과: AI 후보 {len(rows)}건 / 반영 {len(facts)}건 / 제외 {len(rows) - len(facts)}건. 반영값도 원문 검토가 필요합니다.")
     if len({f.fiscal_year for f in facts}) < 2:
         warnings.append("비교연도 미확인: 원문 전기 비교열 누락 여부를 확인하십시오. 현재 자료만으로 3개년 분석을 완성하지 않습니다.")
+    if cache is not None and not cached and facts:
+        cache[cache_key] = {"result": raw_result, "meta": deepcopy(meta)}
+        while len(cache) > 8:
+            del cache[next(iter(cache))]
+    if meta["cache_hit"]:
+        warnings.append("동일 문서·모델·추출 조건의 저장 결과를 재사용했습니다. 외부 API를 호출하지 않았습니다.")
     return facts, warnings, meta

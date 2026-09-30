@@ -368,7 +368,11 @@ def ai_report_panel(project: AnalysisProject):
                 if not source:
                     continue
                 try:
-                    facts, warnings, _ = extract_facts_from_text(text, project.entity.entity_id, source, provider, default_scope=project.entity.reporting_scope)
+                    if any(f.source_id == source_id for f in project.facts):
+                        raise ValueError("이미 추출된 문서입니다. 상단의 보고서 추가·재분석에서 교체 여부를 확인하십시오.")
+                    facts, warnings, meta = extract_facts_from_text(text, project.entity.entity_id, source, provider,
+                        default_scope=project.entity.reporting_scope, cache=project.narrative.setdefault("extraction_cache", {}))
+                    project.narrative.setdefault("api_usage", []).append(meta)
                     project.facts.extend(facts)
                     added += len(facts)
                     if facts:

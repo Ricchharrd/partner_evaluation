@@ -1,6 +1,7 @@
 import json
 from io import BytesIO
 import unittest
+from urllib.error import HTTPError
 from unittest.mock import patch, MagicMock
 from zipfile import ZipFile
 
@@ -12,6 +13,18 @@ from tests.helpers import sample_project
 
 
 class OpenAIHandoffTests(unittest.TestCase):
+    def test_http_diagnostic_does_not_expose_server_message(self):
+        body = {"error": {"code": "unsupported_value", "param": "text.format.type", "message": "SECRET_KEY PRIVATE_DOCUMENT"}}
+        error = HTTPError("https://api.openai.com/v1/responses", 400, "Bad request", {}, BytesIO(json.dumps(body).encode()))
+        with patch("urllib.request.urlopen", side_effect=error):
+            with self.assertRaises(RuntimeError) as caught:
+                OpenAIProvider("SECRET_KEY", approval=lambda body: None).request({})
+        message = str(caught.exception)
+        self.assertIn("text.format.type", message)
+        self.assertIn("unsupported_value", message)
+        self.assertNotIn("SECRET_KEY", message)
+        self.assertNotIn("PRIVATE_DOCUMENT", message)
+
     def test_research_cache_and_minimal_identity(self):
         project = sample_project()
         project.entity.notes = "INTERNAL_NOTE"
@@ -28,10 +41,15 @@ class OpenAIHandoffTests(unittest.TestCase):
         response = MagicMock()
         response.__enter__.return_value.read.return_value = json.dumps(payload).encode()
         with patch("urllib.request.urlopen", return_value=response) as call:
-            result, meta = OpenAIProvider("test-key").generate_json("Extract", {}, 9999)
+            result, meta = OpenAIProvider("test-key", approval=lambda body: None).generate_json("Extract", {}, 9999)
         body = json.loads(call.call_args.args[0].data)
         self.assertFalse(body["store"])
+        self.assertEqual(body["model"], "gpt-6-luna")
+        self.assertEqual(body["reasoning"], {"effort": "none"})
         self.assertEqual(body["max_output_tokens"], 5000)
+        self.assertEqual(body["input"][0]["role"], "system")
+        self.assertIn("JSON", body["input"][0]["content"])
+        self.assertEqual(json.loads(body["input"][1]["content"]), {})
         self.assertEqual(result, {"facts": []})
         self.assertEqual(meta["provider"], "openai")
 

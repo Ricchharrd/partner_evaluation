@@ -68,6 +68,8 @@ class IntegratedTests(unittest.TestCase):
                 project = sample_project()
                 project.entity.legal_name = f"Synthetic partner {i + 1} (TEST ONLY)"
                 recalculate(project)
+                from partner_finance.hitl import review_digest
+                project.narrative["hitl_review"] = {"digest": review_digest(project), "reviewer": "Test reviewer"}
                 finalize(project, "Test reviewer", "합성 입력 통합 테스트. 실기업 평가 아님.")
                 store.save(project)
                 restored = store.load(project.project_id)

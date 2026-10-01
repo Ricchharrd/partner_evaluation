@@ -5,7 +5,7 @@ from zipfile import ZipFile, ZIP_DEFLATED
 
 ROOT = Path(__file__).resolve().parent
 SKILL = ROOT / "deliverables" / "partner-financial-review"
-MODULES = ("schema", "analysis", "validation", "account_guards", "policy", "offline_review")
+MODULES = ("schema", "analysis", "validation", "account_guards", "policy", "offline_review", "report_workpaper")
 
 
 def main():
@@ -14,7 +14,8 @@ def main():
     for name in MODULES:
         copy2(ROOT / "partner_finance" / (name + ".py"), target / (name + ".py"))
     with ZipFile(ROOT / "deliverables" / "partner-review-skill.zip", "w", ZIP_DEFLATED) as z:
-        paths = [SKILL / "SKILL.md", SKILL / "references" / "internal-calculation.md", SKILL / "scripts" / "calculate.py", SKILL / "scripts" / "select_evidence.py"]
+        paths = [SKILL / "SKILL.md", SKILL / "references" / "internal-calculation.md", SKILL / "references" / "report-format.md",
+                 SKILL / "scripts" / "calculate.py", SKILL / "scripts" / "select_evidence.py", SKILL / "scripts" / "prepare_report.py"]
         paths += [target / (name + ".py") for name in MODULES]
         for p in paths:
             z.write(p, p.relative_to(SKILL.parent).as_posix())

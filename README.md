@@ -1,12 +1,20 @@
 # 해외 파트너사 재무평가 워크벤치
 
+## 최신 기본 흐름
+기업명 → 공개 보고서 분석 및 기사 조사 → 결과 화면에서 `00_claude_start.md` 받기 → 사내 Claude 스킬로 5개 항목 보고서 초안 작성.
+SEC·DART는 선택 기능이다. 비공개 재무제표는 웹에 올리지 않고 사내 Claude에서만 처리한다.
+기본 화면에서는 검토 양식·단계 이동을 강제하지 않는다. 결과 다운로드는 자동 승인과 다르며 중요한 예외·보안·비용 판단은 사람에게 남긴다.
+최신 사용법·검증 범위는 [PUBLIC_INTERNAL_GUIDE.md](PUBLIC_INTERNAL_GUIDE.md)를 우선한다. 아래 레거시 상세 도구 설명과 다른 경우 최신 안내가 우선한다.
+
 ## 현재 AI 연결 방식
+
+모든 활성 OpenAI 호출에는 요청별 보안·비용 사전 승인이 필요합니다. 최종 검토에는 대상·수치·예외·사업정보 확인을 기록합니다. 사용법과 통제 한계는 [HITL_GUIDE.md](HITL_GUIDE.md)를 확인하십시오.
 
 현재 화면은 개인 OpenAI API로 공개자료를 처리하고, 검토 패킷을 다운로드하여 사내 Claude에서 수동 검토하는 구성입니다. 최신 설정은 [OPENAI_CLAUDE_GUIDE.md](OPENAI_CLAUDE_GUIDE.md)를 따르십시오. 아래 과거 Claude API 설정 설명보다 이 안내가 우선합니다. 사내 Claude용 스킬은 `deliverables/partner-review-skill.zip`입니다.
 
 ## 통합 시범 버전 업데이트
 
-기업별 평가·사업근거·SEC 공시 동향·검토·보고서 화면을 연결했습니다. 실행 순서와 현재 한계는 [PILOT_GUIDE.md](PILOT_GUIDE.md)를 먼저 확인하십시오. 로컬 실행은 `run_workbench.bat`입니다. 공개 배포는 수행하지 않았습니다.
+기업별 평가·사업근거·SEC 공시 동향·검토·보고서 화면을 연결했습니다. 로컬 실행은 `run_workbench.bat`입니다. GitHub 연결 Streamlit 배포본과 로컬 검증은 별개이며 사내 사용성·접근정책 검증은 추가로 필요합니다.
 
 건설·인프라 PPP 업무에서 해외 파트너사의 공개 공시 또는 사용자 제공 자료를 검토하고, 출처가 붙은 재무분석표와 한국어 보고서를 만드는 Streamlit MVP입니다.
 

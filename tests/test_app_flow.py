@@ -1,4 +1,6 @@
 import os
+import json
+from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -15,6 +17,53 @@ APP = Path(__file__).resolve().parents[1] / "streamlit_app.py"
 
 
 class AppFlowTests(unittest.TestCase):
+    def test_news_one_click_approval_calls_api_once(self):
+        payload = {"status": "completed", "output": [{"type": "message", "content": [{
+            "type": "output_text", "text": "Synthetic construction news",
+            "annotations": [{"type": "url_citation", "title": "Synthetic source", "url": "https://example.com"}]}]}]}
+        with TemporaryDirectory() as root, patch.dict(os.environ, {"DATA_DIR": root, "APP_PASSWORD": "", "APP_USER_ID": "ui-test", "OPENAI_API_KEY": "test-only"}), patch("urllib.request.urlopen") as network:
+            network.return_value.__enter__.return_value.read.return_value = json.dumps(payload).encode()
+            app = AppTest.from_file(str(APP), default_timeout=30).run()
+            app.checkbox(key="public_workspace_ack").check().run()
+            app.text_input[0].set_value("Synthetic construction")
+            next(b for b in app.button if b.label == "이 기업으로 시작").click().run()
+            next(r for r in app.radio if r.label == "분석 경로").set_value("공개 현안만 · 비공개 재무제표는 사내 Claude").run()
+            next(b for b in app.button if b.label == "뉴스·사업정보 조사").click().run()
+            self.assertFalse(app.exception)
+            network.assert_not_called()
+            self.assertFalse(app.text_input)
+            self.assertFalse(any("추가 비용" in c.label for c in app.checkbox))
+            next(b for b in app.button if b.label == "공개자료로 승인하고 실행").click().run()
+            self.assertFalse(app.exception)
+            self.assertEqual(network.call_count, 1)
+            self.assertEqual(next(r for r in app.radio if r.label == "진행 단계").value, "2. 결과 확인")
+            self.assertEqual(len(app.session_state.project.narrative["research_briefs"]), 1)
+            app.run()
+            self.assertEqual(network.call_count, 1)
+
+    def test_pdf_one_click_approval_resumes_upload(self):
+        upload = BytesIO(b"synthetic public PDF")
+        upload.name, upload.type = "synthetic.pdf", "application/pdf"
+        payload = {"status": "completed", "output": [{"type": "message", "content": [{
+            "type": "output_text", "text": '{"facts": [], "warnings": []}'}]}]}
+        with TemporaryDirectory() as root, patch.dict(os.environ, {"DATA_DIR": root, "APP_PASSWORD": "", "APP_USER_ID": "ui-test", "OPENAI_API_KEY": "test-only"}), patch("urllib.request.urlopen") as network, patch("streamlit.file_uploader", return_value=upload), patch("partner_finance.ingest.parse_uploaded_file", return_value=([], [], "Synthetic annual report revenue 2025 100 EUR")):
+            network.return_value.__enter__.return_value.read.return_value = json.dumps(payload).encode()
+            app = AppTest.from_file(str(APP), default_timeout=30).run()
+            app.checkbox(key="public_workspace_ack").check().run()
+            app.text_input[0].set_value("Synthetic construction")
+            next(b for b in app.button if b.label == "이 기업으로 시작").click().run()
+            next(c for c in app.checkbox if c.label.startswith("공개된 재무보고서")).check().run()
+            next(b for b in app.button if b.label == "이 자료로 분석하기").click().run()
+            self.assertFalse(app.exception)
+            network.assert_not_called()
+            next(b for b in app.button if b.label == "공개자료로 승인하고 실행").click().run()
+            self.assertFalse(app.exception)
+            self.assertEqual(network.call_count, 1)
+            self.assertEqual(len(app.session_state.project.sources), 1)
+            self.assertEqual(len(app.session_state.project.narrative["api_usage"]), 1)
+            app.run()
+            self.assertEqual(network.call_count, 1)
+
     def test_direct_start_empty_states_and_private_route(self):
         with TemporaryDirectory() as root, patch.dict(os.environ, {"DATA_DIR": root, "APP_PASSWORD": "", "APP_USER_ID": "ui-test"}):
             app = AppTest.from_file(str(APP), default_timeout=30).run()

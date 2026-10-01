@@ -24,6 +24,10 @@ class HITLTests(unittest.TestCase):
         self.assertTrue(preflight({"input": "x" * 21000})["high_volume"])
         self.assertTrue(preflight({"tools": [{"type": "web_search"}]})["high_volume"])
         self.assertIsNone(preflight({"model": "unknown"})["estimated_text_usd"])
+        bounded = {"tools": [{"type": "web_search", "search_context_size": "low"}], "max_tool_calls": 3}
+        self.assertFalse(preflight(bounded)["high_volume"])
+        self.assertTrue(preflight({**bounded, "max_tool_calls": 4})["high_volume"])
+        self.assertTrue(preflight({**bounded, "input": "x" * 21000})["high_volume"])
 
     def test_single_use_expiry_and_scope(self):
         tickets = {"one": {"expires": 100}}

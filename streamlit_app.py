@@ -495,15 +495,32 @@ def main():
     st.markdown(
         """<style>
         .stApp { background: linear-gradient(135deg, #f6f1e8 0%, #eef4f2 100%); }
+        .stMainBlockContainer { max-width: 1080px; padding-top: 2.5rem; }
         h1, h2, h3 { font-family: Georgia, 'Malgun Gothic', serif; color: #14213d; }
         [data-testid='stMetric'] { background:#fffdf8; border:1px solid #ded2c1; padding:14px; }
         .stButton button[kind='primary'] { background:#0f6b8c; border-color:#0f6b8c; }
+        [data-testid='stRadio'] div[role='radiogroup'] { gap: .65rem; flex-wrap: wrap; }
+        [data-testid='stRadioOption'], [data-testid='stRadio'] div[role='radiogroup'] > label {
+            background: #fffdf8; border: 1px solid #ded2c1; border-radius: 8px;
+            padding: .6rem .85rem; margin: 0;
+        }
+        [data-testid='stRadioOption'][data-selected='true'],
+        [data-testid='stRadio'] div[role='radiogroup'] > label:has(input:checked) {
+            border-color: #0f6b8c; background: #e8f2f3;
+        }
+        @media (max-width: 640px) {
+            .stMainBlockContainer { padding: 1.5rem 1rem; }
+            h1 { font-size: 2rem !important; }
+            [data-testid='stRadioOption'] { padding: .5rem; }
+            [data-testid='stRadio'] div[role='radiogroup'] > label { flex: 1 1 auto; }
+        }
         </style>""",
         unsafe_allow_html=True,
     )
     st.title("파트너 살펴보기")
-    st.caption("공개자료 조사·분석 → 사내 Claude 전달 → 내부자료 결합·최종 검토")
-    st.info("이 웹서비스에는 공개자료만 입력하십시오. 비공개 재무제표·내부 검토의견은 사내 Claude에서만 처리합니다. 수정된 평가기준은 웹에서도 사용합니다.")
+    st.caption("공개자료는 여기서 정리하고, 최종 판단은 사내 Claude에서 마무리합니다.")
+    if not st.session_state.get("public_workspace_ack"):
+        st.info("시작 전 확인: 이 웹에는 공개자료만 입력하세요. 거래처가 직접 제공한 비공개 재무제표와 내부 의견은 사내 Claude에서만 처리합니다.")
     if not st.checkbox("기업명·검색어·파일·메모를 포함해 이 웹서비스에는 공개 가능한 정보만 입력하겠습니다.", key="public_workspace_ack"):
         st.stop()
     init_state()

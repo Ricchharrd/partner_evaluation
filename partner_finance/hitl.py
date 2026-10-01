@@ -70,7 +70,7 @@ def authorize_request(project, body):
     st.rerun()
 
 
-def render_hitl(project, persist, *, include_fact_review=True):
+def render_hitl(project, persist, *, include_fact_review=True, show_review=True):
     import streamlit as st
     pending = st.session_state.get("hitl_pending")
     if pending and pending["project_id"] == project.project_id:
@@ -112,8 +112,13 @@ def render_hitl(project, persist, *, include_fact_review=True):
         st.info("승인하지 않으면 아래 분석 버튼을 눌러도 외부 호출은 실행되지 않습니다.")
     if st.session_state.get("hitl_next"):
         st.info(st.session_state.pop("hitl_next"))
-    if not project.facts and not project.narrative.get("research_briefs"):
+    if not show_review or (not project.facts and not project.narrative.get("research_briefs")):
         return
+    render_evidence_review(project, persist, include_fact_review=include_fact_review)
+
+
+def render_evidence_review(project, persist, *, include_fact_review=True):
+    import streamlit as st
     with st.expander("사람의 검토 · 대상/수치/예외/사업정보", expanded=not current_review(project)):
         st.write(f"대상: {project.entity.legal_name} / {project.entity.reporting_scope} / 연도: {sorted({f.fiscal_year for f in project.facts})}")
         st.caption("미확인 정보는 임의로 승인하지 말고 수정하거나 보류하십시오. 수정은 상세 편집 도구에서 합니다. 자료·계산·조사 결과가 바뀌면 이 확인은 무효화됩니다.")

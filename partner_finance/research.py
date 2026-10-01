@@ -10,8 +10,8 @@ from .openai_provider import OpenAIProvider
 from .hitl import authorize_request
 
 
-def research_company_openai(project, api_key, model):
-    provider = OpenAIProvider(api_key, model, approval=lambda body: authorize_request(project, body))
+def research_company_openai(project, api_key, model, *, action=None):
+    provider = OpenAIProvider(api_key, model, approval=lambda body: authorize_request(project, body, action=action))
     identity = {"legal_name": project.entity.legal_name, "country": project.entity.country, "identifiers": project.entity.identifiers}
     fingerprint = hashlib.sha256(json.dumps({"identity": identity, "model": model, "day": utc_now()[:10]}, sort_keys=True).encode()).hexdigest()
     for row in project.narrative.get("research_briefs", []):

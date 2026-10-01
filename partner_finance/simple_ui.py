@@ -12,7 +12,7 @@ from .research import research_company_openai
 from .openai_provider import OpenAIProvider, DEFAULT_OPENAI_MODEL
 from .handoff import build_handoff, packet_content
 from .discovery import find_candidates, collect_latest
-from .hitl import authorize_request, render_hitl, render_evidence_review, current_review
+from .hitl import authorize_request, render_hitl, render_evidence_review, current_review, clear_action_tickets
 
 
 STEPS = ["1. 자료 준비", "2. 결과 확인", "3. 사내 전달"]
@@ -135,7 +135,8 @@ def render(store, owner, secret, panels):
         st.session_state[step_key] = STEPS[requested_step]
     stage = st.radio("진행 단계", STEPS, key=step_key, horizontal=True)
     st.caption("자료는 한 번만 올립니다. 결과를 확인한 뒤 사내 Claude용 전달자료를 받으세요.")
-    render_hitl(project, persist, include_fact_review=not news_only, show_review=False)
+    approved_action = render_hitl(project, persist, include_fact_review=not news_only, show_review=False,
+                                 allowed_actions=(["research"] + ([] if news_only else ["upload"])) if stage == STEPS[0] else [])
 
     if stage == STEPS[2]:
         st.subheader("사내 Claude에서 검토를 마무리하세요")
@@ -236,10 +237,11 @@ def render(store, owner, secret, panels):
             force_refresh = st.checkbox("저장 결과 대신 AI 새 추출 요청 (추가 비용·새 승인 필요)", value=False)
         st.caption("공개자료는 개인 OpenAI API로 정리하고, 내부 판단은 사내 Claude에서 수행합니다. 원문과 내부자료의 외부 전송 정책을 준수하십시오.")
         permitted = public_file
-        if upload and upload.name.lower().endswith('.pdf') and secret("OPENAI_API_KEY"):
-            permitted = public_file and st.checkbox("이 PDF는 공개자료이며 개인 OpenAI API에서 처리할 수 있습니다.")
-        if st.button("이 자료로 분석하기", disabled=upload is None or not permitted, type="primary"):
+        run_upload = st.button("이 자료로 분석하기", disabled=upload is None or not permitted, type="primary")
+        if run_upload or approved_action == "upload":
             try:
+                if upload is None or not permitted:
+                    raise ValueError("공개 보고서 파일을 선택한 뒤 다시 분석해 주세요.")
                 from .ingest import parse_uploaded_file
                 from .ai import extract_facts_from_text
                 with st.spinner("보고서 읽기 → 수치 추출 → 검증 중입니다..."):
@@ -251,7 +253,7 @@ def render(store, owner, secret, panels):
                             raise ValueError("기존 값 교체 확인란을 선택하십시오. 재분석에는 API 비용이 발생할 수 있습니다.")
                     facts, warnings, text = parse_uploaded_file(upload.name, upload.getvalue(), project.entity.entity_id, source)
                     if text:
-                        provider = OpenAIProvider(secret("OPENAI_API_KEY"), secret("OPENAI_MODEL", DEFAULT_OPENAI_MODEL), approval=lambda body: authorize_request(project, body))
+                        provider = OpenAIProvider(secret("OPENAI_API_KEY"), secret("OPENAI_MODEL", DEFAULT_OPENAI_MODEL), approval=lambda body: authorize_request(project, body, action="upload"))
                         if provider.available:
                             facts, ai_warnings, meta = extract_facts_from_text(text, project.entity.entity_id, source, provider,
                                 default_scope=project.entity.reporting_scope,
@@ -285,29 +287,35 @@ def render(store, owner, secret, panels):
                 st.rerun()
             except Exception as exc:
                 st.error(f"자료 처리 실패: {exc}")
+            finally:
+                clear_action_tickets(project)
         for warning in project.narrative.get("collection_warnings", []):
             st.warning(warning)
     with st.expander("공개 기사·사업정보 조사" + ("" if news_only else " · 선택"), expanded=news_only):
-        render_research(project, persist, secret, allow_run=True)
+        render_research(project, persist, secret, allow_run=True, approved=approved_action == "research")
     if has_results:
         st.button("다음 · 결과 확인", type="primary", on_click=next_step, args=(project, 1))
 
 
-def render_research(project, persist, secret, *, allow_run):
+def render_research(project, persist, secret, *, allow_run, approved=False):
     if allow_run:
         key = secret("OPENAI_API_KEY")
         st.caption("공개 법인 식별정보만 검색에 사용합니다. 내부 점수·메모는 전송하지 않습니다. 검색 결과는 검토 전 초안이며 API 사용료가 발생할 수 있습니다.")
         if not key:
             st.info("자동 웹 조사는 관리자 API 연결 후 사용할 수 있습니다. 공개 공시는 첫 화면의 SEC·DART 검색을 이용해 주세요.")
-        if st.button("뉴스·사업정보 조사", disabled=not key):
+        if st.button("뉴스·사업정보 조사", disabled=not key) or approved:
             try:
                 with st.spinner("공개 웹 출처를 조사하고 있습니다..."):
-                    research_company_openai(project, key, secret("OPENAI_MODEL", DEFAULT_OPENAI_MODEL))
+                    if not key:
+                        raise ValueError("API 연결이 필요합니다.")
+                    research_company_openai(project, key, secret("OPENAI_MODEL", DEFAULT_OPENAI_MODEL), action="research")
                     persist()
                 st.session_state[f"next_step_{project.project_id}"] = 1
                 st.rerun()
             except Exception:
                 st.error("웹 조사를 완료하지 못했습니다. API 권한·잔액·연결을 확인하고 다시 시도하십시오. 기존 결과는 유지됩니다.")
+            finally:
+                clear_action_tickets(project)
         return
     for brief in reversed(project.narrative.get("research_briefs", [])):
         with st.expander(f"기사·사업정보 결과 · {brief['collected_at'][:10]} · {brief['status']}", expanded=True):

@@ -38,10 +38,14 @@ def preflight(body):
     tokens = len(raw.encode("utf-8"))
     output = int(body.get("max_output_tokens", 5000))
     tools = bool(body.get("tools"))
+    bounded_search = (type(body.get("max_tool_calls")) is int and 0 < body["max_tool_calls"] <= 3
+                      and tools and all(t.get("type") == "web_search" and
+                      t.get("search_context_size") == "low" for t in body["tools"]))
     cost = None  # No unverified or model-independent price assumptions.
     return {"hash": fingerprint(body), "model": body.get("model"), "estimated_input_tokens": tokens,
             "output_limit": output, "estimated_text_usd": cost, "web_tools": tools,
-            "input_bytes": tokens, "high_volume": tokens > 20000 or tools,
+            "input_bytes": tokens, "high_volume": tokens > 20000 or (tools and not bounded_search),
+            "bounded_search": bounded_search,
             "over_limit": tokens > 240_000 or output > 5000,
             "blocked": blocked, "sensitive": sensitive}
 
@@ -51,7 +55,7 @@ def consume_ticket(tickets, request_hash, now=None):
     return bool(ticket and ticket["expires"] >= (time.time() if now is None else now))
 
 
-def authorize_request(project, body):
+def authorize_request(project, body, *, action=None):
     import streamlit as st
     info = preflight(body)
     key = project.project_id + ":" + info["hash"]
@@ -66,55 +70,64 @@ def authorize_request(project, body):
         project.narrative.setdefault("hitl_call_log", []).append({**info, "at": utc_now(), "status": "승인된 요청 시도"})
         return
     # Body stays in this session only; preview is never written to project audit logs.
-    st.session_state["hitl_pending"] = {"project_id": project.project_id, "info": info, "body": body}
+    st.session_state["hitl_pending"] = {"project_id": project.project_id, "info": info, "body": body, "action": action}
     st.rerun()
 
 
-def render_hitl(project, persist, *, include_fact_review=True, show_review=True):
+def render_hitl(project, persist, *, include_fact_review=True, show_review=True, allowed_actions=None):
     import streamlit as st
+    approved_action = None
     pending = st.session_state.get("hitl_pending")
     if pending and pending["project_id"] == project.project_id:
         info = preflight(pending["body"])
         prefix = "hitl_" + info["hash"][:16]
-        st.subheader("외부 AI 호출 전 확인 · 아직 전송하지 않았습니다")
-        st.write(f"전송처: 개인 OpenAI API / 모델: {info['model']}")
-        st.write(f"평가 대상: {project.entity.legal_name} / 국가: {project.entity.country or '미확인'}")
-        st.write(f"전송 JSON: {info['input_bytes']:,} UTF-8 바이트 / 출력 한도: {info['output_limit']:,} 토큰 / 이번 승인: 요청 1회")
-        st.caption("바이트 수는 토큰 수가 아닙니다. 사전 비용은 확정하지 않으며 실제 API 사용량은 처리 후 표시합니다. 검색 비용은 별도입니다.")
+        st.subheader("한 번 확인하고 바로 실행하세요")
+        task = "공개 기사·사업정보 조사" if info["web_tools"] else "공개자료 AI 분석"
+        st.write(f"**{project.entity.legal_name} · {task}**")
+        st.caption("버튼을 누르면 이번 자료·검색어가 공개자료이며 회사 정책상 개인 OpenAI API 전송이 허용됨을 확인하고, 유료 요청 1회를 승인합니다. 비공개 자료는 사내 Claude에서만 처리하세요.")
+        if info["bounded_search"]:
+            st.caption("웹 검색 최대 3회 · 간략 검색 · 답변 길이 제한 적용. 검색·토큰 비용은 발생하며 사전 금액은 확정할 수 없습니다.")
         if info["high_volume"]:
-            st.warning("대량 입력 또는 웹 조사입니다. 필요한 페이지만 남기거나 범위를 줄일 수 있습니다. 검색 결과 토큰과 도구 비용은 사전에 확정할 수 없습니다.")
-        if info["sensitive"]:
-            st.warning("민감정보 표시가 탐지됐습니다. 공개자료 여부를 다시 확인하거나 회사의 외부전송 승인 근거를 기록하십시오.")
-        st.caption("자동 탐지는 완전하지 않습니다. 탐지 없음은 보안 승인이나 안전 보증이 아닙니다. 사내 평가기준·후보사 목록도 내부정보일 수 있습니다.")
-        with st.expander("실제로 전송할 내용 확인 (API 키 제외)"):
+            st.warning("입력이 크거나 검색 범위가 큽니다. 비용을 줄이려면 취소 후 필요한 페이지·범위만 선택하세요.")
+        if info["blocked"] or info["sensitive"] or info["over_limit"]:
+            st.error("보안 또는 처리 한도로 실행할 수 없습니다. 자료를 제거하거나 범위를 줄여 다시 준비하세요. 승인으로 우회할 수 없습니다.")
+        with st.expander("전송 내용·모델·처리 한도 보기"):
+            st.write(f"개인 OpenAI API / {info['model']} / 입력 {info['input_bytes']:,}바이트 / 출력 최대 {info['output_limit']:,}토큰")
+            st.caption("바이트 수는 토큰 수가 아닙니다. 자동 탐지는 보안 승인이나 안전 보증이 아닙니다. 실제 사용량은 처리 후 확인하세요. API 키는 아래에 포함하지 않습니다.")
             st.json(pending["body"])
-        reviewer = st.text_input("요청 확인자", key=prefix + "who")
-        scope = st.text_input("문서 종류·대상 연도·연결/별도 또는 조사 범위", key=prefix + "scope")
-        identity = st.checkbox("대상 법인과 이번 자료·조사 범위를 확인했습니다. 불명확한 정보는 잠정으로 유지합니다.", key=prefix + "identity")
-        classification = st.selectbox("자료 보안 분류", ["선택 필요", "공개자료", "비공개·판단 불가 (사내 Claude에서 처리)"], key=prefix + "class")
-        basis = st.text_input("공개 출처와 공개 여부 확인 근거", key=prefix + "basis")
-        security = st.checkbox("전송 내용을 확인했으며 회사 정책상 이 전송이 허용됩니다. 금지된 전송을 승인하는 것이 아닙니다.", key=prefix + "security")
-        cost = st.checkbox("표시된 규모와 비용 불확실성을 확인하고 이번 1회 처리를 승인합니다.", key=prefix + "cost")
-        volume = st.checkbox("범위 축소 대안을 검토했으며 이 대량 입력/웹 조사 범위로 진행합니다.", key=prefix + "volume") if info["high_volume"] else True
-        ready = reviewer.strip() and basis.strip() and scope.strip() and identity and security and cost and volume and classification == "공개자료" and not info["blocked"] and not info["sensitive"]
-        if st.button("승인 기록 후 계속", key=prefix + "approve", disabled=not ready):
+        volume = st.checkbox("추가 비용 가능성을 확인했으며 이 범위로 진행합니다.", key=prefix + "volume") if info["high_volume"] else True
+        reachable = allowed_actions is None or pending.get("action") in allowed_actions or pending.get("action") is None
+        if not reachable:
+            st.info("이 요청을 실행하려면 자료 준비 단계의 원래 분석 경로로 돌아가거나 취소하세요.")
+        ready = volume and reachable and not any(info[k] for k in ("blocked", "sensitive", "over_limit"))
+        if st.button("공개자료로 승인하고 실행", key=prefix + "approve", disabled=not ready, type="primary"):
             key = project.project_id + ":" + info["hash"]
-            st.session_state.setdefault("hitl_tickets", {})[key] = {"expires": time.time() + 600}
-            project.narrative.setdefault("hitl_approvals", []).append({**info, "at": utc_now(), "reviewer": reviewer,
-                "classification": classification, "basis": basis, "declared_scope": scope, "scope": "동일 요청 1회·10분 이내"})
+            project.narrative.setdefault("hitl_approvals", []).append({**info, "at": utc_now(),
+                "reviewer": "현재 세션 사용자 (본인 미인증)", "consent_method": "명시적 실행 버튼",
+                "classification": "공개자료 (사용자 선언)", "basis": "공개성·외부전송 허용 여부에 대한 사용자 확인; 출처 검증 아님",
+                "declared_scope": task, "action": pending.get("action"), "scope": "동일 요청 1회·10분 이내"})
             persist()
+            st.session_state.setdefault("hitl_tickets", {})[key] = {"expires": time.time() + 600}
             del st.session_state["hitl_pending"]
-            st.session_state["hitl_next"] = "승인했습니다. 아래에서 방금 사용한 분석·조사 버튼을 다시 누르십시오. 동일 요청 1회만 전송됩니다."
+            approved_action = pending.get("action")
+            if approved_action is None:
+                st.info("상세 도구의 실행 승인을 기록했습니다. 해당 도구에서 실행하면 동일 요청 1회만 전송됩니다.")
+        if st.button("취소", key=prefix + "cancel"):
+            st.session_state.pop("hitl_pending", None)
             st.rerun()
-        if st.button("취소 · 자료 제거/범위 축소 후 다시 준비", key=prefix + "cancel"):
-            del st.session_state["hitl_pending"]
-            st.rerun()
-        st.info("승인하지 않으면 아래 분석 버튼을 눌러도 외부 호출은 실행되지 않습니다.")
-    if st.session_state.get("hitl_next"):
-        st.info(st.session_state.pop("hitl_next"))
     if not show_review or (not project.facts and not project.narrative.get("research_briefs")):
-        return
+        return approved_action
     render_evidence_review(project, persist, include_fact_review=include_fact_review)
+    return approved_action
+
+
+def clear_action_tickets(project):
+    """Discard unused consent after a resumed action, including failures or cache hits."""
+    import streamlit as st
+    tickets = st.session_state.get("hitl_tickets", {})
+    for key in list(tickets):
+        if key.startswith(project.project_id + ":"):
+            tickets.pop(key, None)
 
 
 def render_evidence_review(project, persist, *, include_fact_review=True):

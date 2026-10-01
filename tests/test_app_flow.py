@@ -17,6 +17,43 @@ APP = Path(__file__).resolve().parents[1] / "streamlit_app.py"
 
 
 class AppFlowTests(unittest.TestCase):
+    def test_public_financials_continue_to_news_with_request_scoped_consent(self):
+        upload = BytesIO(b"synthetic construction PDF")
+        upload.name, upload.type = "synthetic.pdf", "application/pdf"
+        finance = {"status": "completed", "output": [{"type": "message", "content": [{"type": "output_text", "text": '{"facts": []}'}]}]}
+        news = {"status": "completed", "output": [{"type": "message", "content": [{"type": "output_text", "text": "Synthetic construction news",
+            "annotations": [{"type": "url_citation", "title": "Synthetic source", "url": "https://example.com"}]}]}]}
+
+        def extraction(text, entity_id, source, provider, **kwargs):
+            _, meta = provider.generate_json("Synthetic extraction", {"text": text}, 100)
+            facts = sample_project().facts
+            for fact in facts:
+                fact.entity_id, fact.source_id = entity_id, source.source_id
+            return facts, [], meta
+
+        with TemporaryDirectory() as root, patch.dict(os.environ, {"DATA_DIR": root, "APP_PASSWORD": "", "APP_USER_ID": "ui-test", "OPENAI_API_KEY": "test-only"}), patch("urllib.request.urlopen") as network, patch("streamlit.file_uploader", return_value=upload), patch("partner_finance.ingest.parse_uploaded_file", return_value=([], [], "Synthetic public report")), patch("partner_finance.ai.extract_facts_from_text", side_effect=extraction):
+            network.return_value.__enter__.return_value.read.side_effect = [json.dumps(finance).encode(), json.dumps(news).encode()]
+            app = AppTest.from_file(str(APP), default_timeout=30).run()
+            app.checkbox(key="public_workspace_ack").check().run()
+            app.text_input[0].set_value("Synthetic construction")
+            next(b for b in app.button if b.label == "이 기업으로 시작").click().run()
+            next(c for c in app.checkbox if c.label.startswith("공개된 재무보고서")).check().run()
+            next(b for b in app.button if b.label == "이 자료로 분석하기").click().run()
+            network.assert_not_called()
+            next(b for b in app.button if b.label == "공개자료로 승인하고 실행").click().run()
+            self.assertFalse(app.exception)
+            self.assertEqual(network.call_count, 1)
+            self.assertTrue(app.session_state.project.facts)
+            self.assertEqual(app.session_state.hitl_pending["action"], "research")
+            next(b for b in app.button if b.label == "공개자료로 승인하고 실행").click().run()
+            self.assertFalse(app.exception)
+            self.assertEqual(network.call_count, 2)
+            self.assertEqual(next(r for r in app.radio if r.label == "진행 단계").value, "2. 결과 확인")
+            self.assertTrue(any(b.label == "Claude 전달자료 받기" for b in app.get("download_button")))
+            self.assertFalse(app.text_input)
+            app.run()
+            self.assertEqual(network.call_count, 2)
+
     def test_news_one_click_approval_calls_api_once(self):
         payload = {"status": "completed", "output": [{"type": "message", "content": [{
             "type": "output_text", "text": "Synthetic construction news",
@@ -100,16 +137,47 @@ class AppFlowTests(unittest.TestCase):
             app.checkbox(key="public_workspace_ack").check().run()
             next(b for b in app.button if b.label == "결과 보기").click().run()
             self.assertFalse(app.exception)
-            self.assertTrue(any(t.label == "검토 담당자" for t in app.text_input))
+            self.assertFalse(app.text_input)
+            self.assertFalse(app.text_area)
+            self.assertFalse(app.selectbox)
+            self.assertFalse(any("확인했습니다" in c.label for c in app.checkbox))
             self.assertFalse(any(b.label == "뉴스·사업정보 조사" for b in app.button))
-            next(b for b in app.button if b.label == "다음 · 사내 전달자료 받기").click().run()
-            self.assertFalse(app.exception)
-            self.assertTrue(any("검토용 초안" in w.value for w in app.warning))
+            self.assertEqual(next(r for r in app.radio if r.label == "진행 단계").value, "2. 결과 확인")
+            self.assertTrue(any("미검토 초안" in w.value for w in app.caption))
             self.assertTrue(any(b.label == "Claude 전달자료 받기" for b in app.get("download_button")))
             self.assertFalse(any(b.label == "Word 보고서" for b in app.get("download_button")))
-            next(b for b in app.button if b.label == "결과 확인으로 이동").click().run()
-            self.assertFalse(app.exception)
+            self.assertFalse(any(b.label == "원문 확인 완료로 기록" for b in app.button))
+            self.assertFalse(any(e.label == "AI 사용 내역 · 절약 모드" for e in app.expander))
+            self.assertEqual(app.session_state.project.narrative["research_briefs"][0]["status"], "검토 대기")
+            self.assertFalse(app.session_state.project.narrative.get("hitl_review"))
             self.assertTrue(any("Synthetic public evidence" in m.value for m in app.markdown))
+            app.toggle[0].set_value(True).run()
+            next(b for b in app.button if b.label == "원문 확인 완료로 기록").click().run()
+            self.assertFalse(app.exception)
+            self.assertEqual(next(r for r in app.radio if r.label == "진행 단계").value, "2. 결과 확인")
+            from partner_finance.hitl import current_review
+            self.assertTrue(current_review(app.session_state.project))
+            self.assertEqual(app.session_state.project.narrative["research_briefs"][0]["status"], "승인")
+            self.assertNotEqual(app.session_state.project.status, "검토 완료")
+            self.assertTrue(current_review(ProjectStore(root).load(project.project_id, "ui-test")))
+            app.run()
+            self.assertEqual(len(app.session_state.project.narrative["hitl_review_history"]), 1)
+
+    def test_financial_error_blocks_quick_review_but_not_draft(self):
+        with TemporaryDirectory() as root, patch.dict(os.environ, {"DATA_DIR": root, "APP_PASSWORD": "", "APP_USER_ID": "ui-test"}):
+            project = sample_project()
+            next(f for f in project.facts if f.standard_item == "total_liabilities").normalized_value = 1
+            recalculate(project)
+            ProjectStore(root).save(project, "ui-test")
+            app = AppTest.from_file(str(APP), default_timeout=30).run()
+            app.checkbox(key="public_workspace_ack").check().run()
+            next(b for b in app.button if b.label == "결과 보기").click().run()
+            self.assertFalse(app.exception)
+            self.assertTrue(any(b.label == "Claude 전달자료 받기" for b in app.get("download_button")))
+            self.assertTrue(any("미검토 초안" in w.value for w in app.caption))
+            app.toggle[0].set_value(True).run()
+            self.assertTrue(next(b for b in app.button if b.label == "원문 확인 완료로 기록").disabled)
+            self.assertFalse(app.exception)
 
     def test_portfolio_detail_and_new_entity(self):
         with TemporaryDirectory() as root, patch.dict(os.environ, {"DATA_DIR": root, "APP_PASSWORD": "", "APP_USER_ID": "ui-test"}):

@@ -69,7 +69,7 @@ class OpenAIHandoffTests(unittest.TestCase):
         with patch("urllib.request.urlopen", side_effect=AssertionError("No network during export")):
             packet = build_handoff(project)
         with ZipFile(BytesIO(packet)) as archive:
-            self.assertEqual(len(archive.namelist()), 4)
+            self.assertEqual(len(archive.namelist()), 5)
             brief = archive.read("01_review_brief.md").decode()
             raw = archive.read("02_evidence.json").decode()
         evidence = json.loads(raw)

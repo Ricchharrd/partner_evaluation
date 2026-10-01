@@ -1,12 +1,32 @@
 import unittest
 from unittest.mock import patch
-from partner_finance.hitl import preflight, consume_ticket, review_digest, current_review
+from partner_finance.hitl import preflight, consume_ticket, review_digest, current_review, record_quick_review
 from partner_finance.openai_provider import OpenAIProvider
 from partner_finance.workflow import recalculate, finalize
 from tests.helpers import sample_project
 
 
 class HITLTests(unittest.TestCase):
+    def test_combined_review_preserves_exclusions_limits_and_invalidates(self):
+        project = sample_project()
+        recalculate(project)
+        project.narrative["research_briefs"] = [
+            {"id": "pending", "status": "검토 대기", "sections": []},
+            {"id": "excluded", "status": "제외", "sections": []}]
+        before = [(r.value, r.status) for r in project.ratios]
+        record_quick_review(project)
+        self.assertTrue(current_review(project))
+        self.assertEqual([r["status"] for r in project.narrative["research_briefs"]], ["승인", "제외"])
+        self.assertEqual(before, [(r.value, r.status) for r in project.ratios])
+        self.assertNotEqual(project.status, "검토 완료")
+        record_quick_review(project)
+        self.assertEqual(len(project.narrative["hitl_review_history"]), 1)
+        project.narrative["research_briefs"][0]["sections"] = [{"text": "changed evidence"}]
+        self.assertFalse(current_review(project))
+        project.facts[0].normalized_value += 1
+        with self.assertRaises(ValueError):
+            record_quick_review(project)
+
     def test_no_network_without_approval(self):
         with patch("urllib.request.urlopen") as network:
             with self.assertRaises(ValueError):

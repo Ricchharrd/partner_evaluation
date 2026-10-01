@@ -10,9 +10,10 @@ from .dashboard import assessment, portfolio
 from .reports import build_word, build_excel
 from .research import research_company_openai
 from .openai_provider import OpenAIProvider, DEFAULT_OPENAI_MODEL
-from .handoff import build_handoff, packet_content
+from .handoff import build_handoff, packet_content, build_claude_start
 from .discovery import find_candidates, collect_latest
-from .hitl import authorize_request, render_hitl, render_evidence_review, current_review, clear_action_tickets
+from .hitl import (authorize_request, render_hitl, render_evidence_review, current_review,
+                   clear_action_tickets, quick_review_blocker, record_quick_review)
 
 
 STEPS = ["1. 자료 준비", "2. 결과 확인", "3. 사내 전달"]
@@ -20,6 +21,26 @@ STEPS = ["1. 자료 준비", "2. 결과 확인", "3. 사내 전달"]
 
 def next_step(project, index):
     st.session_state[f"step_{project.project_id}"] = STEPS[index]
+
+
+def render_downloads(project, news_only):
+    st.download_button("Claude 전달자료 받기", build_claude_start(project), "00_claude_start.md",
+                       "text/markdown", width="stretch", type="primary", on_click="ignore")
+    st.caption("원문 검토 기록이 포함된 자료입니다. 최종 판단은 사내 Claude에서 합니다." if current_review(project)
+               else "미검토 초안입니다. 사내 Claude에서 원문 확인과 최종 검토를 진행하세요.")
+    with st.expander("사용 방법 · Word/Excel · 스킬 설치"):
+        st.write("받은 00_claude_start.md 하나를 사내 Claude에 첨부하면 됩니다. 스킬이 보고서 초안을 작성하고 중요한 예외만 질문합니다.")
+        st.caption("비공개 재무제표는 사내 Claude에만 첨부하며, 내부 결과는 이 웹에 다시 올리지 않습니다.")
+        st.caption("아래 Word·Excel은 공개자료 예비 산출물입니다. 내부 맥락을 결합한 최종 보고서는 사내 Claude에서 작성합니다.")
+        st.download_button("전체 근거 ZIP (필요할 때만)", build_handoff(project), "claude_review_packet.zip", "application/zip", on_click="ignore")
+        if project.facts and not news_only:
+            st.download_button("Word 보고서", build_word(project), "partner_report.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", on_click="ignore")
+            st.download_button("Excel 재무표", build_excel(project), "partner_financials.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", on_click="ignore")
+        brief, _ = packet_content(project)
+        st.download_button("요약 파일", brief, "01_review_brief.md", "text/markdown", on_click="ignore")
+        skill_zip = Path(__file__).resolve().parents[1] / "deliverables" / "partner-review-skill.zip"
+        if skill_zip.is_file():
+            st.download_button("사내 Claude 스킬 받기", skill_zip.read_bytes(), "partner-review-skill.zip", "application/zip", on_click="ignore")
 
 
 def render(store, owner, secret, panels):
@@ -113,11 +134,14 @@ def render(store, owner, secret, panels):
     st.button("다른 기업 보기", on_click=home)
     st.subheader(project.entity.legal_name)
     routes = ["공개 재무제표 + 공개 현안", "공개 현안만 · 비공개 재무제표는 사내 Claude"]
-    route = st.radio("분석 경로", routes, index=1 if project.narrative.get("analysis_route") == "news_only" else 0,
-                     key=f"route_{project.project_id}")
+    existing_results = bool(project.facts or project.narrative.get("research_briefs"))
+    route_container = st.expander("분석 경로 변경", expanded=False) if existing_results else st.container()
+    with route_container:
+        route = st.radio("분석 경로", routes, index=1 if project.narrative.get("analysis_route") == "news_only" else 0,
+                         key=f"route_{project.project_id}")
     news_only = route == routes[1]
     project.narrative["analysis_route"] = "news_only" if news_only else "public_financials"
-    if news_only:
+    if news_only and not existing_results:
         st.info("여기서는 공개 기사·사업정보만 조사합니다. 비공개 재무제표는 아래 전달자료와 함께 사내 Claude에 넣으십시오. 계산·점수 산정도 Claude 안에서 수행합니다.")
     if project.status == "검토 완료" and not current_review(project):
         project.status = "재검토 필요"
@@ -133,8 +157,8 @@ def render(store, owner, secret, panels):
     requested_step = st.session_state.pop(f"next_step_{project.project_id}", None)
     if requested_step is not None:
         st.session_state[step_key] = STEPS[requested_step]
-    stage = st.radio("진행 단계", STEPS, key=step_key, horizontal=True)
-    st.caption("자료는 한 번만 올립니다. 결과를 확인한 뒤 사내 Claude용 전달자료를 받으세요.")
+    with st.expander("다른 단계로 이동", expanded=False):
+        stage = st.radio("진행 단계", STEPS, key=step_key, horizontal=True)
     approved_action = render_hitl(project, persist, include_fact_review=not news_only, show_review=False,
                                  allowed_actions=(["research"] + ([] if news_only else ["upload"])) if stage == STEPS[0] else [])
 
@@ -149,24 +173,11 @@ def render(store, owner, secret, panels):
             st.button("결과 확인으로 이동", on_click=next_step, args=(project, 1))
         else:
             st.success("현재 자료의 확인 기록이 있습니다. 최종 내부 판단은 사내 Claude에서 진행하세요.")
-        st.download_button("Claude 전달자료 받기", build_handoff(project), "claude_review_packet.zip", "application/zip", width="stretch", type="primary")
-        st.markdown("**1.** 전달자료를 받아 압축을 풉니다.\n\n**2.** 사내 Claude에 `01_review_brief.md`부터 첨부하고, 필요한 근거 파일을 추가합니다.\n\n**3.** 비공개 재무제표는 사내 Claude에만 첨부합니다. 최종 보고서는 담당자가 승인합니다.")
-        st.info("사내 계산결과·검토의견·최종 보고서는 이 웹에 다시 올리지 마세요.")
-        with st.expander("처음 사용하는 경우 · Claude 스킬 설치"):
-            st.write("회사에서 허용한 사내 Claude 환경에 최신 스킬을 등록하세요. 내부 계산은 코드 실행 기능이 허용된 경우 사용할 수 있습니다.")
-            skill_zip = Path(__file__).resolve().parents[1] / "deliverables" / "partner-review-skill.zip"
-            if skill_zip.is_file():
-                st.download_button("사내 Claude 스킬 받기", skill_zip.read_bytes(), "partner-review-skill.zip", "application/zip")
-        with st.expander("Word·Excel 또는 요약 파일만 받기"):
-            if project.facts and not news_only:
-                st.download_button("Word 보고서", build_word(project), "partner_report.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-                st.download_button("Excel 재무표", build_excel(project), "partner_financials.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            brief, _ = packet_content(project)
-            st.download_button("요약 파일", brief, "01_review_brief.md", "text/markdown")
+        render_downloads(project, news_only)
         return
 
     if stage == STEPS[1]:
-        st.subheader("분석 결과를 원문과 확인하세요")
+        st.subheader("분석 결과")
         if not has_results:
             st.info("확인할 결과가 아직 없습니다. 자료 준비 단계에서 분석을 시작해 주세요.")
             st.button("자료 준비로 이동", on_click=next_step, args=(project, 0))
@@ -175,10 +186,9 @@ def render(store, owner, secret, panels):
         errors = sum(v.severity == "오류" for v in issues)
         if errors:
             st.error(f"수치 오류 {errors}건을 먼저 확인해 주세요. 검토 승인만으로 오류가 해제되지는 않습니다.")
-        elif not current_review(project):
-            st.info("아래 결과와 출처를 읽고 ‘원문·근거 확인 기록’을 남겨 주세요. 미확인 항목은 보류할 수 있습니다.")
-        else:
-            st.success("현재 자료의 확인 기록이 저장됐습니다. 사내 전달 단계로 이동할 수 있습니다.")
+        if project.narrative.get("research_followup_needed"):
+            st.warning("재무 분석은 저장됐지만 기사 조사를 완료하지 못했습니다. 현재 전달파일에 현안 누락이 표시됩니다.")
+        render_downloads(project, news_only)
         if project.facts and not news_only:
             assessment(project)
         warnings = project.narrative.get("collection_warnings", []) if not news_only else []
@@ -188,11 +198,23 @@ def render(store, owner, secret, panels):
                     st.write(warning)
                 for issue in issues:
                     st.write(f"FY{issue.fiscal_year}: {issue.message}")
-        render_research(project, persist, secret, allow_run=False)
-        st.markdown("### 원문·근거 확인 기록")
-        render_evidence_review(project, persist, include_fact_review=not news_only)
-        advanced = st.toggle("수치를 수정하거나 상세 내역 보기", value=False, key=f"advanced_{project.project_id}")
+        advanced = st.toggle("검토·수정·추가 기능 (선택)", value=False, key=f"advanced_{project.project_id}")
+        render_research(project, persist, secret, allow_run=False, detailed=advanced)
         if advanced:
+            if current_review(project):
+                st.success("현재 결과에 대한 확인 기록이 있습니다.")
+            else:
+                st.caption("직접 원문을 대조했다면 아래 버튼으로 확인을 기록할 수 있습니다. 누락·경고는 유지하며 최종 승인과는 별개입니다.")
+                blocker = quick_review_blocker(project)
+                if blocker:
+                    st.warning(blocker)
+                if st.button("원문 확인 완료로 기록", disabled=bool(blocker)):
+                    record_quick_review(project)
+                    persist()
+                    st.rerun()
+            with st.expander("담당자·의견을 별도로 기록하려면"):
+                render_evidence_review(project, persist, include_fact_review=not news_only)
+            st.button("자료 추가·다시 분석", on_click=next_step, args=(project, 0))
             if not news_only:
                 panels["review"](project)
                 panels["validation"](project)
@@ -213,13 +235,12 @@ def render(store, owner, secret, panels):
             with st.expander("사업 근거 직접 등록"):
                 panels["updates"](project)
                 panels["business"](project)
-        with st.expander("AI 사용 내역 · 절약 모드"):
-            usage = project.narrative.get("api_usage", [])
-            st.write(f"재무 추출 기록 {len(usage)}건 / 저장 결과 재사용 {sum(bool(m.get('cache_hit')) for m in usage)}건")
-            st.caption("같은 추출 결과는 재사용합니다. 계산·문서 출력에는 API를 호출하지 않습니다. 실제 청구액은 제공사에서 확인하세요.")
-            if usage:
-                st.json(usage[-1])
-        st.button("다음 · 사내 전달자료 받기", type="primary", on_click=next_step, args=(project, 2))
+            with st.expander("AI 사용 내역 · 절약 모드"):
+                usage = project.narrative.get("api_usage", [])
+                st.write(f"재무 추출 기록 {len(usage)}건 / 저장 결과 재사용 {sum(bool(m.get('cache_hit')) for m in usage)}건")
+                st.caption("같은 추출 결과는 재사용합니다. 계산·문서 출력에는 API를 호출하지 않습니다. 실제 청구액은 제공사에서 확인하세요.")
+                if usage:
+                    st.json(usage[-1])
         return
 
     st.subheader("공개자료를 준비해 주세요")
@@ -235,7 +256,7 @@ def render(store, owner, secret, panels):
         with st.expander("재분석 옵션 · 필요한 경우에만"):
             replace_confirmed = st.checkbox("같은 파일 재분석 시 기존 추출값·수정값을 이력에 보존하고 새 결과로 교체합니다.") if project.facts else False
             force_refresh = st.checkbox("저장 결과 대신 AI 새 추출 요청 (추가 비용·새 승인 필요)", value=False)
-        st.caption("공개자료는 개인 OpenAI API로 정리하고, 내부 판단은 사내 Claude에서 수행합니다. 원문과 내부자료의 외부 전송 정책을 준수하십시오.")
+        st.caption("재무 추출 후 공개 기사 조사까지 이어집니다. 각 유료 요청은 실행 전에 확인하며, 내부 판단은 사내 Claude에서 수행합니다.")
         permitted = public_file
         run_upload = st.button("이 자료로 분석하기", disabled=upload is None or not permitted, type="primary")
         if run_upload or approved_action == "upload":
@@ -283,6 +304,15 @@ def render(store, owner, secret, panels):
                         warnings.append("재무수치 0건입니다. 손익계산서·재무상태표·현금흐름표가 포함된 문서인지 확인하십시오. 요약 프레젠테이션만으로는 평가가 어려울 수 있습니다.")
                     persist()
                 if facts:
+                    if secret("OPENAI_API_KEY"):
+                        try:
+                            with st.spinner("재무 분석을 저장했습니다. 공개 현안 조사를 준비합니다..."):
+                                research_company_openai(project, secret("OPENAI_API_KEY"), secret("OPENAI_MODEL", DEFAULT_OPENAI_MODEL), action="research")
+                                project.narrative.pop("research_followup_needed", None)
+                                persist()
+                        except Exception:
+                            project.narrative["research_followup_needed"] = True
+                            persist()
                     st.session_state[f"next_step_{project.project_id}"] = 1
                 st.rerun()
             except Exception as exc:
@@ -297,7 +327,7 @@ def render(store, owner, secret, panels):
         st.button("다음 · 결과 확인", type="primary", on_click=next_step, args=(project, 1))
 
 
-def render_research(project, persist, secret, *, allow_run, approved=False):
+def render_research(project, persist, secret, *, allow_run, approved=False, detailed=False):
     if allow_run:
         key = secret("OPENAI_API_KEY")
         st.caption("공개 법인 식별정보만 검색에 사용합니다. 내부 점수·메모는 전송하지 않습니다. 검색 결과는 검토 전 초안이며 API 사용료가 발생할 수 있습니다.")
@@ -309,6 +339,7 @@ def render_research(project, persist, secret, *, allow_run, approved=False):
                     if not key:
                         raise ValueError("API 연결이 필요합니다.")
                     research_company_openai(project, key, secret("OPENAI_MODEL", DEFAULT_OPENAI_MODEL), action="research")
+                    project.narrative.pop("research_followup_needed", None)
                     persist()
                 st.session_state[f"next_step_{project.project_id}"] = 1
                 st.rerun()
@@ -323,6 +354,8 @@ def render_research(project, persist, secret, *, allow_run, approved=False):
                 st.write(section["text"])
                 for citation_index, citation in enumerate(section["citations"]):
                     st.link_button(f"{section_index + 1}.{citation_index + 1} {citation['title']} ({brief['id'][:6]})", citation["url"])
+            if not detailed:
+                continue
             with st.form(f"research_review_{brief['id']}"):
                 reviewer = st.text_input("확인자")
                 note = st.text_input("확인 의견")

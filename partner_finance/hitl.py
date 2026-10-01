@@ -130,6 +130,41 @@ def clear_action_tickets(project):
             tickets.pop(key, None)
 
 
+def quick_review_blocker(project):
+    from .workflow import is_current
+    financial = project.narrative.get("analysis_route") != "news_only" and bool(project.facts)
+    if not financial and not project.narrative.get("research_briefs"):
+        return "확인할 분석 결과가 없습니다."
+    if financial and (not is_current(project) or any(v.severity == "오류" for v in project.validations)):
+        return "수치 오류를 수정한 뒤 확인하거나, 미검토 초안으로 전달하세요."
+    return None
+
+
+def record_quick_review(project):
+    """Record an explicit user attestation, not automatic verification or final approval."""
+    blocker = quick_review_blocker(project)
+    if blocker:
+        raise ValueError(blocker)
+    if current_review(project):
+        return
+    at = utc_now()
+    reviewer = "현재 세션 사용자 (본인 미인증)"
+    note = "사용자가 결과·원문 근거·표시된 한계를 확인하고 전달 버튼을 누름. 자동 원문 검증이나 최종 승인 아님."
+    approved_ids = []
+    for brief in project.narrative.get("research_briefs", []):
+        if brief.get("status") == "검토 대기":
+            brief.update(status="승인", reviewer=reviewer, review_note=note, reviewed_at=at)
+            approved_ids.append(brief["id"])
+    project.narrative.pop("final", None)
+    project.narrative.pop("ai_cache", None)
+    project.narrative.pop("review", None)
+    project.status = "검토 중"
+    record = {"at": at, "reviewer": reviewer, "note": note, "decision": "검토 확인 · 한계 유지",
+              "method": "통합 확인 버튼", "research_ids": approved_ids, "digest": review_digest(project)}
+    project.narrative.setdefault("hitl_review_history", []).append(record)
+    project.narrative["hitl_review"] = record
+
+
 def render_evidence_review(project, persist, *, include_fact_review=True):
     import streamlit as st
     with st.expander("사람의 검토 · 대상/수치/예외/사업정보", expanded=not current_review(project)):

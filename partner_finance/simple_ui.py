@@ -11,7 +11,6 @@ from .reports import build_word, build_excel
 from .research import research_company_openai
 from .market_news import has_saved_news
 from .openai_provider import OpenAIProvider, DEFAULT_OPENAI_MODEL
-from .handoff import build_handoff, packet_content, build_claude_start
 from .discovery import find_candidates, collect_latest
 from .hitl import (authorize_request, render_hitl, render_evidence_review, current_review,
                    clear_action_tickets, quick_review_blocker, record_quick_review)
@@ -25,6 +24,11 @@ def next_step(project, index):
 
 
 def render_downloads(project, news_only):
+    try:
+        from .handoff import build_handoff, packet_content, build_claude_start
+    except ImportError:
+        st.error("Claude 전달자료를 생성할 수 없습니다. 배포 모듈 상태를 확인해 주세요.")
+        return
     st.download_button("Claude 전달자료 받기", build_claude_start(project), "00_claude_start.md",
                        "text/markdown", width="stretch", type="primary", on_click="ignore")
     st.caption("원문 검토 기록이 포함된 자료입니다. 최종 판단은 사내 Claude에서 합니다." if current_review(project)

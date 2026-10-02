@@ -479,7 +479,7 @@ def render_project(project: AnalysisProject):
 
 
 def main():
-    st.set_page_config(page_title="파트너 살펴보기", layout="wide", initial_sidebar_state="collapsed")
+    st.set_page_config(page_title="파트너 마켓 인텔리전스", layout="wide", initial_sidebar_state="auto")
     password = secret("APP_PASSWORD")
     if password and not st.session_state.get("authenticated"):
         st.title("파트너 평가 워크벤치 로그인")
@@ -494,19 +494,52 @@ def main():
         st.stop()
     st.markdown(
         """<style>
-        .stApp { background: linear-gradient(135deg, #f6f1e8 0%, #eef4f2 100%); }
-        .stMainBlockContainer { max-width: 1080px; padding-top: 2.5rem; }
-        h1, h2, h3 { font-family: Georgia, 'Malgun Gothic', serif; color: #14213d; }
-        [data-testid='stMetric'] { background:#fffdf8; border:1px solid #ded2c1; padding:14px; }
-        .stButton button[kind='primary'] { background:#0f6b8c; border-color:#0f6b8c; }
+        .stApp { background:#f7f8fa; color:#202d3a; }
+        [data-testid='stHeader'] { background:#f7f8fa; }
+        .stMainBlockContainer { max-width:1120px; padding-top:2.5rem; padding-bottom:3rem; }
+        [data-testid='stSidebar'] { background:#eef1f5; border-right:1px solid #dde3eb; }
+        [data-testid='stSidebar'] h2 { font-size:1.05rem; letter-spacing:-.03em; }
+        h1 { font-size:2rem !important; letter-spacing:-.04em; color:#172f49; }
+        h2 { font-size:1.3rem !important; letter-spacing:-.025em; }
+        h3 { font-size:1.1rem !important; line-height:1.6 !important; }
+        [data-testid='stText'] { font-family:inherit; line-height:1.75; color:#384858; }
+        [data-testid='stCaptionContainer'] { color:#667588; }
+        [data-testid='stVerticalBlockBorderWrapper'] > div {
+            border-color:#e0e5ec !important; border-radius:12px !important; background:#fff;
+        }
+        [data-testid='stButton'] button { min-height:40px; border-radius:8px; }
+        [data-testid='stButton'] button p, [data-testid='stDownloadButton'] button p {
+            white-space:normal !important; overflow:visible !important; text-overflow:clip !important;
+        }
+        .stButton button[kind='primary']:not(:disabled) { background:#1b3d65; border-color:#1b3d65; }
+        [data-testid='stSelectbox'] [data-baseweb='select'] > div {
+            background:#fff; border-color:#d8e0e9; border-radius:8px;
+        }
+        .company-identity { display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+            padding:4px 0 12px; margin-bottom:8px; border-bottom:1px solid #e3e9f0; }
+        .company-topic { background:#dce6f2; color:#163e67; border-radius:6px;
+            padding:5px 10px; font-weight:700; font-size:.85rem; }
+        .company-name { color:#172f49; font-size:1.05rem; font-weight:700; }
         [data-testid='stRadio'] div[role='radiogroup'] { gap: .65rem; flex-wrap: wrap; }
         [data-testid='stRadioOption'], [data-testid='stRadio'] div[role='radiogroup'] > label {
-            background: #fffdf8; border: 1px solid #ded2c1; border-radius: 8px;
+            background:#fff; border:1px solid #d8e0e9; border-radius:8px;
             padding: .6rem .85rem; margin: 0;
         }
         [data-testid='stRadioOption'][data-selected='true'],
         [data-testid='stRadio'] div[role='radiogroup'] > label:has(input:checked) {
-            border-color: #0f6b8c; background: #e8f2f3;
+            border-color:#cbd9e9; background:#dce6f2;
+        }
+        [data-testid='stSidebar'] [data-testid='stRadio'] div[role='radiogroup'] > label {
+            width:100%; padding:.75rem 1rem; border-color:transparent; background:transparent;
+        }
+        [data-testid='stSidebar'] [data-testid='stRadioOption'] {
+            width:100%; padding:.75rem 1rem; border-color:transparent; background:transparent;
+        }
+        [data-testid='stSidebar'] [data-testid='stRadioOption'][data-selected='true'] {
+            background:#dce6f2; border-color:#cbd9e9;
+        }
+        [data-testid='stSidebar'] [data-testid='stRadio'] div[role='radiogroup'] > label:has(input:checked) {
+            background:#dce6f2; border-color:#cbd9e9;
         }
         @media (max-width: 640px) {
             .stMainBlockContainer { padding: 1.5rem 1rem; }
@@ -517,24 +550,39 @@ def main():
         </style>""",
         unsafe_allow_html=True,
     )
-    st.title("파트너 살펴보기")
-    st.caption("공개자료는 여기서 정리하고, 최종 판단은 사내 Claude에서 마무리합니다.")
-    if not st.session_state.get("public_workspace_ack"):
-        st.info("시작 전 확인: 이 웹에는 공개자료만 입력하세요. 거래처가 직접 제공한 비공개 재무제표와 내부 의견은 사내 Claude에서만 처리합니다.")
-    if not st.checkbox("기업명·검색어·파일·메모를 포함해 이 웹서비스에는 공개 가능한 정보만 입력하겠습니다.", key="public_workspace_ack"):
-        st.stop()
     init_state()
     if secret("SEC_USER_AGENT"):
         os.environ["SEC_USER_AGENT"] = secret("SEC_USER_AGENT")
     from partner_finance.simple_ui import render
-    render(get_store(), secret("APP_USER_ID", "local-user"), secret, {
-        "input": source_input_panel, "review": review_panel, "validation": validation_analysis_panel,
-        "ai": ai_report_panel, "export": export_panel,
-        "updates": lambda p: updates_panel(p, save_project, secret("SEC_USER_AGENT")),
-        "business": lambda p: business_panel(p, save_project),
-        "effort": lambda p: effort_panel(p, save_project),
-    })
-    if st.session_state.project is not None:
+    from partner_finance.market_ui import render_market
+    with st.sidebar:
+        st.markdown("## 파트너 인텔리전스")
+        st.caption("기업 뉴스에서 협업 적합성 검토까지")
+        view = st.radio("둘러보기", ["기업 뉴스", "관심 기업 관리", "재무 상세분석"], key="workspace_view",
+                        format_func=lambda value: "대시보드" if value == "기업 뉴스" else value,
+                        label_visibility="collapsed")
+        st.divider()
+        with st.expander("공개자료 이용 안내", expanded=not st.session_state.get("public_workspace_ack")):
+            st.caption("뉴스는 바로 열람할 수 있습니다. 기업 추가와 분석에는 공개자료만 사용하세요. 비공개 재무제표와 내부 의견은 사내 Claude에서 처리합니다.")
+            can_input = st.checkbox("공개 가능한 정보만 입력하겠습니다.", key="public_workspace_ack")
+        st.caption("저장 뉴스 열람은 추가 AI 호출 없음")
+    if view in ("기업 뉴스", "관심 기업 관리"):
+        render_market(get_store(), secret("APP_USER_ID", "local-user"), secret,
+                      management=view == "관심 기업 관리", can_input=can_input)
+    else:
+        st.title("재무 상세분석")
+        st.caption("선택한 기업의 재무자료와 저장 뉴스를 함께 검토합니다.")
+        if not can_input:
+            st.info("왼쪽 메뉴의 공개자료 이용 안내를 확인한 뒤 분석을 시작해 주세요.")
+            st.stop()
+        render(get_store(), secret("APP_USER_ID", "local-user"), secret, {
+            "input": source_input_panel, "review": review_panel, "validation": validation_analysis_panel,
+            "ai": ai_report_panel, "export": export_panel,
+            "updates": lambda p: updates_panel(p, save_project, secret("SEC_USER_AGENT")),
+            "business": lambda p: business_panel(p, save_project),
+            "effort": lambda p: effort_panel(p, save_project),
+        })
+    if view == "재무 상세분석" and st.session_state.project is not None:
         get_store().save(st.session_state.project, secret("APP_USER_ID", "local-user"))
     st.divider()
     st.caption("예비 검토용 · 원문 확인 필요" + (" · 로컬 시범 모드: 공개 배포 전 접근통제 설정 필요" if not password else ""))

@@ -9,6 +9,7 @@ from .workflow import recalculate, is_current, log_action
 from .dashboard import assessment, portfolio
 from .reports import build_word, build_excel
 from .research import research_company_openai
+from .market_news import has_saved_news
 from .openai_provider import OpenAIProvider, DEFAULT_OPENAI_MODEL
 from .handoff import build_handoff, packet_content, build_claude_start
 from .discovery import find_candidates, collect_latest
@@ -256,7 +257,11 @@ def render(store, owner, secret, panels):
         with st.expander("재분석 옵션 · 필요한 경우에만"):
             replace_confirmed = st.checkbox("같은 파일 재분석 시 기존 추출값·수정값을 이력에 보존하고 새 결과로 교체합니다.") if project.facts else False
             force_refresh = st.checkbox("저장 결과 대신 AI 새 추출 요청 (추가 비용·새 승인 필요)", value=False)
-        st.caption("재무 추출 후 공개 기사 조사까지 이어집니다. 각 유료 요청은 실행 전에 확인하며, 내부 판단은 사내 Claude에서 수행합니다.")
+        if has_saved_news(project):
+            st.info("이미 수집한 기업 뉴스와 출처를 재사용합니다. 재무분석 후 같은 뉴스를 다시 검색하지 않습니다.")
+            st.caption("뉴스 수집일과 미검토 상태는 전달자료에 유지됩니다. 최신 뉴스가 필요하면 기업 뉴스에서 업데이트하세요.")
+        else:
+            st.caption("재무 추출 후 필요한 경우 공개 기사 조사를 이어갑니다. 각 유료 요청은 실행 전에 확인합니다.")
         permitted = public_file
         run_upload = st.button("이 자료로 분석하기", disabled=upload is None or not permitted, type="primary")
         if run_upload or approved_action == "upload":
@@ -304,7 +309,10 @@ def render(store, owner, secret, panels):
                         warnings.append("재무수치 0건입니다. 손익계산서·재무상태표·현금흐름표가 포함된 문서인지 확인하십시오. 요약 프레젠테이션만으로는 평가가 어려울 수 있습니다.")
                     persist()
                 if facts:
-                    if secret("OPENAI_API_KEY"):
+                    if has_saved_news(project):
+                        project.narrative.pop("research_followup_needed", None)
+                        persist()
+                    elif secret("OPENAI_API_KEY"):
                         try:
                             with st.spinner("재무 분석을 저장했습니다. 공개 현안 조사를 준비합니다..."):
                                 research_company_openai(project, secret("OPENAI_API_KEY"), secret("OPENAI_MODEL", DEFAULT_OPENAI_MODEL), action="research")

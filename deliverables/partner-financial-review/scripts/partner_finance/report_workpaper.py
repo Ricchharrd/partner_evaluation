@@ -25,7 +25,9 @@ def report_context(evidence):
     years = sorted({f["fiscal_year"] for f in facts})[-3:]
     validations = [] if news_only else evidence.get("validations", [])
     errors = [v for v in validations if v.get("severity") == "오류"]
-    briefs = [b for b in evidence.get("research_briefs", []) if b.get("status") != "제외"]
+    identity = {key: evidence.get("entity", {}).get(key, "") for key in ("legal_name", "country")}
+    briefs = [b for b in evidence.get("research_briefs", []) if b.get("status") != "제외"
+              and (b.get("kind") != "company-news/1" or b.get("identity") == identity)]
     questions = []
     if errors:
         questions.append("재무 오류 확인: " + "; ".join(cell(v.get("message")) for v in errors[:3]))
@@ -109,7 +111,8 @@ def build_report_workpaper(evidence):
         lines.append("조사 근거 없음. 현안 없음이나 양호로 해석하지 않습니다.")
     for brief in selected:
         lines.append(f"### 조사 {cell(brief.get('id'))} / {cell(brief.get('collected_at'))} / {cell(brief.get('status'))}")
-        for section in brief.get("sections", [])[:3]:
+        section_limit = 6 if brief.get("kind") == "company-news/1" else 3
+        for section in brief.get("sections", [])[:section_limit]:
             text = section.get("text", "")
             lines.append("> " + text[:1800].replace("\n", "\n> ") + ("\n> [일부 생략: 필요한 경우 근거 JSON 확인]" if len(text) > 1800 else ""))
             citations = section.get("citations", [])
@@ -117,7 +120,7 @@ def build_report_workpaper(evidence):
                 lines.append("출처 없음: 확정 사실로 사용 금지")
             for citation in citations[:5]:
                 lines.append(f"- 출처: {cell(citation.get('title'))} / {cell(citation.get('url'))}")
-    lines.append(f"요약 범위: 제외 자료를 뺀 최근 {len(selected)}건 / 전체 {len(context['briefs'])}건, 각 3문단·문단당 1,800자·출처 5개 한도. 누락된 항목은 근거 JSON에 보존됩니다.")
+    lines.append(f"요약 범위: 제외 자료를 뺀 최근 {len(selected)}건 / 전체 {len(context['briefs'])}건, 기업 뉴스는 수집당 6기사, 일반 조사는 3문단, 문단당 1,800자와 출처 5개 한도. 저장된 뉴스의 수집일을 확인하고 필요한 경우에만 추가 조사합니다. 누락된 항목은 근거 JSON에 보존됩니다.")
     lines += ["## 4. 종합 검토", "사내 Claude 작성: 재무와 기사 중 근거가 있는 사실을 연결해 사업상 의미를 해석으로 표시합니다. 인과관계·수주 확정·파트너 적합성을 근거 없이 단정하지 않습니다.",
               f"현재 상태: {'재무 오류가 있어 관련 수치·등급 결론 보류' if context['errors'] else '검토 초안 작성 가능; 자료 누락·미검토 한계 유지'}.",
               "사내 의견·비공개 수치·최종 보고서는 사내에서만 보관합니다.", "## 5. 추가 확인사항과 다음 조치"]

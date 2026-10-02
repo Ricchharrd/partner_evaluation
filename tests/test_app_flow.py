@@ -16,6 +16,12 @@ from tests.helpers import sample_project
 APP = Path(__file__).resolve().parents[1] / "streamlit_app.py"
 
 
+def financial_app():
+    app = AppTest.from_file(str(APP), default_timeout=30)
+    app.session_state.workspace_view = "재무 상세분석"
+    return app.run()
+
+
 class AppFlowTests(unittest.TestCase):
     def test_public_financials_continue_to_news_with_request_scoped_consent(self):
         upload = BytesIO(b"synthetic construction PDF")
@@ -33,7 +39,7 @@ class AppFlowTests(unittest.TestCase):
 
         with TemporaryDirectory() as root, patch.dict(os.environ, {"DATA_DIR": root, "APP_PASSWORD": "", "APP_USER_ID": "ui-test", "OPENAI_API_KEY": "test-only"}), patch("urllib.request.urlopen") as network, patch("streamlit.file_uploader", return_value=upload), patch("partner_finance.ingest.parse_uploaded_file", return_value=([], [], "Synthetic public report")), patch("partner_finance.ai.extract_facts_from_text", side_effect=extraction):
             network.return_value.__enter__.return_value.read.side_effect = [json.dumps(finance).encode(), json.dumps(news).encode()]
-            app = AppTest.from_file(str(APP), default_timeout=30).run()
+            app = financial_app()
             app.checkbox(key="public_workspace_ack").check().run()
             app.text_input[0].set_value("Synthetic construction")
             next(b for b in app.button if b.label == "이 기업으로 시작").click().run()
@@ -60,7 +66,7 @@ class AppFlowTests(unittest.TestCase):
             "annotations": [{"type": "url_citation", "title": "Synthetic source", "url": "https://example.com"}]}]}]}
         with TemporaryDirectory() as root, patch.dict(os.environ, {"DATA_DIR": root, "APP_PASSWORD": "", "APP_USER_ID": "ui-test", "OPENAI_API_KEY": "test-only"}), patch("urllib.request.urlopen") as network:
             network.return_value.__enter__.return_value.read.return_value = json.dumps(payload).encode()
-            app = AppTest.from_file(str(APP), default_timeout=30).run()
+            app = financial_app()
             app.checkbox(key="public_workspace_ack").check().run()
             app.text_input[0].set_value("Synthetic construction")
             next(b for b in app.button if b.label == "이 기업으로 시작").click().run()
@@ -85,7 +91,7 @@ class AppFlowTests(unittest.TestCase):
             "type": "output_text", "text": '{"facts": [], "warnings": []}'}]}]}
         with TemporaryDirectory() as root, patch.dict(os.environ, {"DATA_DIR": root, "APP_PASSWORD": "", "APP_USER_ID": "ui-test", "OPENAI_API_KEY": "test-only"}), patch("urllib.request.urlopen") as network, patch("streamlit.file_uploader", return_value=upload), patch("partner_finance.ingest.parse_uploaded_file", return_value=([], [], "Synthetic annual report revenue 2025 100 EUR")):
             network.return_value.__enter__.return_value.read.return_value = json.dumps(payload).encode()
-            app = AppTest.from_file(str(APP), default_timeout=30).run()
+            app = financial_app()
             app.checkbox(key="public_workspace_ack").check().run()
             app.text_input[0].set_value("Synthetic construction")
             next(b for b in app.button if b.label == "이 기업으로 시작").click().run()
@@ -103,7 +109,7 @@ class AppFlowTests(unittest.TestCase):
 
     def test_direct_start_empty_states_and_private_route(self):
         with TemporaryDirectory() as root, patch.dict(os.environ, {"DATA_DIR": root, "APP_PASSWORD": "", "APP_USER_ID": "ui-test"}):
-            app = AppTest.from_file(str(APP), default_timeout=30).run()
+            app = financial_app()
             app.checkbox(key="public_workspace_ack").check().run()
             optional = next(e for e in app.expander if e.label == "공시 자동수집 · 선택사항")
             self.assertFalse(optional.proto.expanded)
@@ -133,7 +139,7 @@ class AppFlowTests(unittest.TestCase):
             project.narrative["analysis_route"] = "news_only"
             project.narrative["research_briefs"] = [{"id": "synthetic-brief", "collected_at": "2026-10-01", "status": "검토 대기", "sections": [{"text": "Synthetic public evidence", "citations": [{"title": "Synthetic source", "url": "https://example.com"}]}]}]
             ProjectStore(root).save(project, "ui-test")
-            app = AppTest.from_file(str(APP), default_timeout=30).run()
+            app = financial_app()
             app.checkbox(key="public_workspace_ack").check().run()
             next(b for b in app.button if b.label == "결과 보기").click().run()
             self.assertFalse(app.exception)
@@ -169,7 +175,7 @@ class AppFlowTests(unittest.TestCase):
             next(f for f in project.facts if f.standard_item == "total_liabilities").normalized_value = 1
             recalculate(project)
             ProjectStore(root).save(project, "ui-test")
-            app = AppTest.from_file(str(APP), default_timeout=30).run()
+            app = financial_app()
             app.checkbox(key="public_workspace_ack").check().run()
             next(b for b in app.button if b.label == "결과 보기").click().run()
             self.assertFalse(app.exception)
@@ -187,7 +193,7 @@ class AppFlowTests(unittest.TestCase):
                 project.entity.legal_name = f"Synthetic UI {i}"
                 recalculate(project)
                 store.save(project, "ui-test")
-            app = AppTest.from_file(str(APP), default_timeout=30).run()
+            app = financial_app()
             self.assertFalse(app.exception)
             self.assertFalse(app.text_input)
             app.checkbox(key="public_workspace_ack").check().run()
@@ -220,7 +226,7 @@ class AppFlowTests(unittest.TestCase):
 
     def test_password_gate(self):
         with TemporaryDirectory() as root, patch.dict(os.environ, {"DATA_DIR": root, "APP_PASSWORD": "test-pass"}):
-            app = AppTest.from_file(str(APP), default_timeout=30).run()
+            app = financial_app()
             self.assertFalse(app.exception)
             self.assertFalse(app.radio)
             app.text_input[0].set_value("wrong")

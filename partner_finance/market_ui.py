@@ -4,7 +4,8 @@ from copy import deepcopy
 from html import escape
 import streamlit as st
 
-from .market_news import TOPICS, add_company, collect_news, saved_articles
+from .market_news import (TOPICS, FEATURED_COMPANIES, add_company, collect_news,
+                          company_roles, ensure_featured_companies, featured_company, saved_articles)
 from .openai_provider import DEFAULT_OPENAI_MODEL
 from .hitl import render_hitl, clear_action_tickets
 
@@ -21,6 +22,26 @@ def open_financials(project):
 def show_all_companies():
     st.session_state.market_company = "all"
     st.session_state.pop("hitl_pending", None)
+
+
+def show_company(project_id):
+    st.session_state.market_company = project_id
+    st.session_state.pop("hitl_pending", None)
+
+
+def company_identity(project, topic=None, *, card=False):
+    style = " company-identity-card" if card else ""
+    parts = ['<div class="company-identity' + style + '">']
+    if topic:
+        parts.append('<span class="company-topic">' + escape(topic) + '</span>')
+    parts.append('<span class="company-name">' + escape(project.entity.legal_name) + '</span>')
+    roles = company_roles(project)
+    for role in roles:
+        style = " company-role-investor" if role == "투자" else ""
+        parts.append('<span class="company-role' + style + '">' + escape(role) + '</span>')
+    if not roles:
+        parts.append('<span class="company-role company-role-unknown">역할 미확인</span>')
+    return "".join(parts) + "</div>"
 
 
 def company_registration(store, owner, can_input):
@@ -40,8 +61,17 @@ def company_registration(store, owner, can_input):
 
 
 def render_market(store, owner, secret, *, management=False, can_input=True):
+    ensure_featured_companies(store, owner)
     projects = [store.load(r["project_id"], owner) for r in store.list_projects(owner)]
-    watched = sorted((p for p in projects if p.narrative.get("market_watch")), key=lambda p: p.entity.legal_name.casefold())
+    featured_order = {profile["name"]: index for index, profile in enumerate(FEATURED_COMPANIES)}
+
+    def watch_order(project):
+        profile = featured_company(project.entity.legal_name)
+        return (featured_order.get(profile["name"] if profile else None, len(featured_order)),
+                project.entity.legal_name.casefold())
+
+    watched = sorted((p for p in projects if p.narrative.get("market_watch")),
+                     key=watch_order)
     if management:
         st.title("관심 기업 관리")
         st.caption("살펴볼 기업을 등록하고, 대시보드에서 뉴스를 확인하세요.")
@@ -50,7 +80,7 @@ def render_market(store, owner, secret, *, management=False, can_input=True):
             st.subheader(f"등록된 기업 {len(watched)}개")
             for p in watched:
                 with st.container(border=True):
-                    st.write(p.entity.legal_name)
+                    st.markdown(company_identity(p), unsafe_allow_html=True)
                     st.caption(f"저장 뉴스 {len(saved_articles(p))}건")
         return
     st.title("대시보드")
@@ -59,8 +89,8 @@ def render_market(store, owner, secret, *, management=False, can_input=True):
         st.subheader("첫 관심 기업을 등록해 보세요")
         st.caption("한 번 수집한 뉴스는 다시 검색하지 않고 계속 읽을 수 있습니다.")
         company_registration(store, owner, can_input)
-        cols = st.columns(2)
-        for col, name in zip(cols, ("Acciona", "Webuild")):
+        cols = st.columns(3)
+        for col, name in zip(cols, ("Webuild", "Acciona", "Rönesans Holding")):
             if col.button(f"{name} 추가", width="stretch", disabled=not can_input) and can_input:
                 p = add_company(store, owner, name)
                 st.session_state.market_company = p.project_id
@@ -72,9 +102,22 @@ def render_market(store, owner, secret, *, management=False, can_input=True):
     if st.session_state.get("market_company") not in ["all", *by_id]:
         st.session_state.market_company = "all"
     chosen = st.pills("기업 선택", ["all", *by_id], key="market_company",
-                          format_func=lambda key: "전체 기업" if key == "all" else by_id[key].entity.legal_name)
+                      format_func=lambda key: "전체 기업" if key == "all" else
+                      f"{by_id[key].entity.legal_name} · {'·'.join(company_roles(by_id[key])) or '역할 미확인'}")
     selected = by_id.get(chosen)
-    st.caption("기업을 선택하면 해당 기업의 뉴스와 분석 메뉴를 볼 수 있습니다.")
+    if selected:
+        st.markdown(company_identity(selected), unsafe_allow_html=True)
+        st.caption("공개 사업 설명 기준의 역할 태그입니다. 개별 사업의 계약상 역할은 별도 확인이 필요합니다.")
+    else:
+        st.caption("회사를 선택하면 뉴스 업데이트와 재무 상세분석을 진행할 수 있습니다.")
+        columns = st.columns(min(len(watched), 3))
+        for index, project in enumerate(watched):
+            with columns[index % len(columns)]:
+                with st.container(border=True):
+                    st.markdown(company_identity(project, card=True), unsafe_allow_html=True)
+                    st.caption(f"저장 뉴스 {len(saved_articles(project))}건")
+                    st.button("회사 소식 보기", key=f"open_company_{project.project_id}",
+                              on_click=show_company, args=(project.project_id,), width="stretch")
     pending = st.session_state.get("hitl_pending")
     if pending and (not selected or pending["project_id"] != selected.project_id):
         st.session_state.pop("hitl_pending", None)
@@ -150,9 +193,7 @@ def render_market(store, owner, secret, *, management=False, can_input=True):
         st.info("조건에 맞는 저장 뉴스가 없습니다." if total else "아직 기사 카드가 없습니다. 기업을 선택하고 뉴스 업데이트를 실행하면 이곳에 계속 보관됩니다.")
     for p, article in feed[:60]:
         with st.container(border=True):
-            st.markdown('<div class="company-identity"><span class="company-topic">'
-                        + escape(article["topic"]) + '</span><span class="company-name">'
-                        + escape(p.entity.legal_name) + '</span></div>', unsafe_allow_html=True)
+            st.markdown(company_identity(p, article["topic"]), unsafe_allow_html=True)
             st.subheader(article["title"])
             st.text(article["summary"])
             st.caption(f"{article['source_name']}, 발표 {article.get('published_at') or '미확인'}, 수집 {article['collected_at'][:10]}, {article['status']}")

@@ -9,8 +9,10 @@ from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
 
-from partner_finance.market_news import add_company, collect_news, parse_news, saved_articles, has_saved_news
+from partner_finance.market_news import (add_company, collect_news, company_roles,
+                                         ensure_featured_companies, parse_news, saved_articles, has_saved_news)
 from partner_finance.storage import ProjectStore
+from partner_finance.schema import AnalysisProject, EntityProfile
 from partner_finance.handoff import build_claude_start
 from partner_finance.hitl import current_review, review_digest
 
@@ -28,6 +30,25 @@ def response(rows=None, cited=True):
 
 
 class MarketNewsTests(unittest.TestCase):
+    def test_featured_companies_seed_once_and_keep_existing_news(self):
+        with TemporaryDirectory() as root:
+            store = ProjectStore(root)
+            existing = AnalysisProject("acciona 평가", EntityProfile("acciona"))
+            existing.narrative["research_briefs"] = [{"id": "keep-existing", "status": "검토 대기"}]
+            store.save(existing, "alice")
+            ensure_featured_companies(store, "alice")
+            ensure_featured_companies(store, "alice")
+            projects = [store.load(row["project_id"], "alice") for row in store.list_projects("alice")]
+            self.assertEqual(len(projects), 3)
+            by_name = {p.entity.legal_name: p for p in projects}
+            self.assertEqual(company_roles(by_name["Webuild"]), ("EPC",))
+            self.assertEqual(company_roles(by_name["acciona"]), ("EPC", "투자"))
+            self.assertEqual(company_roles(by_name["Rönesans Holding"]), ("EPC", "투자"))
+            self.assertEqual(by_name["acciona"].project_id, existing.project_id)
+            self.assertEqual(by_name["acciona"].narrative["research_briefs"][0]["id"], "keep-existing")
+            self.assertEqual(add_company(store, "alice", "Ronesans").project_id,
+                             by_name["Rönesans Holding"].project_id)
+
     def test_financial_upload_reuses_collected_news_without_second_search(self):
         from tests.helpers import sample_project
         upload = BytesIO(b"synthetic csv")
@@ -127,7 +148,13 @@ class MarketNewsTests(unittest.TestCase):
             app.checkbox(key="public_workspace_ack").check().run()
             self.assertEqual(app.radio(key="workspace_view").value, "기업 뉴스")
             self.assertFalse(app.get("file_uploader"))
-            next(b for b in app.button if b.label == "Acciona 추가").click().run()
+            companies = {row["legal_name"]: row["project_id"] for row in ProjectStore(root).list_projects("market-test")}
+            self.assertEqual(set(companies), {"Webuild", "Acciona", "Rönesans Holding"})
+            cards = [element.value for element in app.markdown if "company-identity" in element.value]
+            self.assertTrue(any("Webuild" in card and "EPC" in card for card in cards))
+            self.assertTrue(any("Acciona" in card and "투자" in card for card in cards))
+            self.assertTrue(any("Rönesans Holding" in card and "투자" in card for card in cards))
+            app.button_group(key="market_company").set_value(companies["Acciona"]).run()
             network.assert_not_called()
             next(b for b in app.button if b.label == "업데이트").click().run()
             network.assert_not_called()
@@ -179,13 +206,13 @@ class MarketNewsTests(unittest.TestCase):
     def test_manage_companies_registration_never_calls_api(self):
         with TemporaryDirectory() as root, patch.dict(os.environ, {"DATA_DIR": root, "APP_PASSWORD": "", "APP_USER_ID": "market-test"}), patch("urllib.request.urlopen") as network:
             app = AppTest.from_file(str(APP), default_timeout=30).run()
-            self.assertTrue(next(b for b in app.button if b.label == "관심 기업에 추가").disabled)
             app.radio(key="workspace_view").set_value("관심 기업 관리").run()
+            self.assertTrue(next(b for b in app.button if b.label == "관심 기업에 추가").disabled)
             app.checkbox(key="public_workspace_ack").check().run()
             next(t for t in app.text_input if t.label == "기업명").set_value("Synthetic builder")
             next(b for b in app.button if b.label == "관심 기업에 추가").click().run()
             self.assertFalse(app.exception)
             app.radio(key="workspace_view").set_value("기업 뉴스").run()
-            self.assertEqual(len(ProjectStore(root).list_projects("market-test")), 1)
+            self.assertEqual(len(ProjectStore(root).list_projects("market-test")), 4)
             self.assertTrue(app.button_group(key="market_company").value)
             network.assert_not_called()

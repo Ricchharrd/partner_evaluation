@@ -517,9 +517,15 @@ def main():
         }
         .company-identity { display:flex; align-items:center; gap:12px; flex-wrap:wrap;
             padding:4px 0 12px; margin-bottom:8px; border-bottom:1px solid #e3e9f0; }
+        .company-identity-card { min-height:74px; align-content:flex-start; gap:6px; }
+        .company-identity-card .company-name { flex-basis:100%; }
         .company-topic { background:#dce6f2; color:#163e67; border-radius:6px;
             padding:5px 10px; font-weight:700; font-size:.85rem; }
         .company-name { color:#172f49; font-size:1.05rem; font-weight:700; }
+        .company-role { display:inline-flex; align-items:center; padding:3px 9px;
+            border-radius:999px; background:#e2f1ed; color:#16614f; font-size:.75rem; font-weight:700; }
+        .company-role-investor { background:#f9ead6; color:#88520a; }
+        .company-role-unknown { background:#eceff3; color:#596b7e; }
         [data-testid='stRadio'] div[role='radiogroup'] { gap: .65rem; flex-wrap: wrap; }
         [data-testid='stRadioOption'], [data-testid='stRadio'] div[role='radiogroup'] > label {
             background:#fff; border:1px solid #d8e0e9; border-radius:8px;

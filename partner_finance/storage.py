@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import re
 import sqlite3
+import time
 from contextlib import contextmanager
 
 from .schema import AnalysisProject, SourceDocument, utc_now
@@ -49,6 +50,29 @@ class ProjectStore:
                 """
             )
             connection.execute("CREATE INDEX IF NOT EXISTS idx_projects_owner_updated ON projects(owner_id, updated_at DESC)")
+            connection.execute("""CREATE TABLE IF NOT EXISTS news_refresh (
+                project_id TEXT NOT NULL, owner_id TEXT NOT NULL, attempted_at REAL NOT NULL,
+                PRIMARY KEY(project_id, owner_id))""")
+
+    def news_refresh_remaining(self, project_id, owner_id, cooldown=3600, now=None):
+        self.load(project_id, owner_id)
+        with self._connect() as connection:
+            row = connection.execute("SELECT attempted_at FROM news_refresh WHERE project_id=? AND owner_id=?",
+                                     (project_id, owner_id)).fetchone()
+        return max(0, int(cooldown - ((time.time() if now is None else now) - row[0]) + 0.999)) if row else 0
+
+    def claim_news_refresh(self, project_id, owner_id, cooldown=3600, now=None):
+        now = time.time() if now is None else now
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if not connection.execute("SELECT 1 FROM projects WHERE project_id=? AND owner_id=?", (project_id, owner_id)).fetchone():
+                raise KeyError("뉴스 대상 기업에 접근할 수 없습니다.")
+            row = connection.execute("SELECT attempted_at FROM news_refresh WHERE project_id=? AND owner_id=?", (project_id, owner_id)).fetchone()
+            if row and now - row[0] < cooldown:
+                return False
+            connection.execute("INSERT INTO news_refresh VALUES(?,?,?) ON CONFLICT(project_id,owner_id) DO UPDATE SET attempted_at=excluded.attempted_at",
+                               (project_id, owner_id, now))
+        return True
 
     def save(self, project: AnalysisProject, owner_id: str = "local-user") -> None:
         project.touch()

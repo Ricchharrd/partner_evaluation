@@ -7,7 +7,6 @@ import streamlit as st
 from .market_news import TOPICS, add_company, collect_news, saved_articles
 from .openai_provider import DEFAULT_OPENAI_MODEL
 from .hitl import render_hitl, clear_action_tickets
-from .handoff import build_claude_start
 
 
 def open_financials(project):
@@ -113,10 +112,16 @@ def render_market(store, owner, secret, *, management=False, can_input=True):
             finally:
                 clear_action_tickets(selected)
         if selected.narrative.get("research_briefs"):
-            news_packet = deepcopy(selected)
-            news_packet.narrative["analysis_route"] = "news_only"
-            actions[3].download_button("Claude 전달자료", build_claude_start(news_packet),
-                               "00_claude_start.md", "text/markdown", on_click="ignore", width="stretch")
+            try:
+                from .handoff import build_claude_start
+                news_packet = deepcopy(selected)
+                news_packet.narrative["analysis_route"] = "news_only"
+                packet = build_claude_start(news_packet)
+            except ImportError:
+                st.error("Claude 전달자료를 생성할 수 없습니다. 배포 모듈 상태를 확인해 주세요.")
+            else:
+                actions[3].download_button("Claude 전달자료", packet,
+                                           "00_claude_start.md", "text/markdown", on_click="ignore", width="stretch")
     else:
         st.caption("전체 기업의 저장 뉴스를 최신순으로 보여줍니다. 업데이트와 분석은 기업을 선택한 뒤 실행하세요.")
     if st.session_state.get("market_notice"):

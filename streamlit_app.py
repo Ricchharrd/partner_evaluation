@@ -546,7 +546,6 @@ def main():
     init_state()
     if secret("SEC_USER_AGENT"):
         os.environ["SEC_USER_AGENT"] = secret("SEC_USER_AGENT")
-    from partner_finance.simple_ui import render
     from partner_finance.market_ui import render_market
     with st.sidebar:
         st.markdown("## 파트너 인텔리전스")
@@ -560,13 +559,18 @@ def main():
         render_market(get_store(), secret("APP_USER_ID", "local-user"), secret,
                       management=view == "관심 기업 관리", can_input=True)
     else:
+        from importlib import reload
+        from partner_finance import simple_ui
+        # Cloud may rerun the entry point while retaining the previous imported UI module.
+        if getattr(simple_ui, "FINANCE_UI_VERSION", 0) < 2:
+            reload(simple_ui)
         st.title("재무 상세분석")
         st.caption("회사 선택 → 공개 재무자료 분석 → 결과와 사내 전달자료 받기")
         if not st.session_state.get("public_workspace_ack"):
             st.caption("공개자료 이용 안내: 업로드는 외부 전송입니다. 공개된 재무자료만 사용하고, 비공개 재무제표와 내부 의견은 사내 Claude에서 처리하세요.")
         if not st.checkbox("공개 가능한 재무자료만 사용합니다", key="public_workspace_ack"):
             st.stop()
-        render(get_store(), secret("APP_USER_ID", "local-user"), secret, {
+        simple_ui.render(get_store(), secret("APP_USER_ID", "local-user"), secret, {
             "input": source_input_panel, "review": review_panel, "validation": validation_analysis_panel,
             "ai": ai_report_panel, "export": export_panel,
             "updates": lambda p: updates_panel(p, save_project, secret("SEC_USER_AGENT")),

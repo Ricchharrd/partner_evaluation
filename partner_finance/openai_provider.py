@@ -85,7 +85,10 @@ class OpenAIProvider:
             raise RuntimeError(safe_api_error(exc)) from None
         if len(data) > 4_000_000:
             raise ValueError("AI 응답 크기 제한 초과")
-        payload = json.loads(data)
+        try:
+            payload = json.loads(data)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ValueError(f"OpenAI API 응답 본문이 JSON이 아닙니다 (수신 {len(data):,}바이트). 요청 결과를 저장하지 않았습니다.") from exc
         response_text(payload)
         return payload
 
@@ -96,7 +99,13 @@ class OpenAIProvider:
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
             "text": {"format": {"type": "json_object"}},
             "max_output_tokens": min(max_tokens, 5000)})
-        result = json.loads(response_text(response))
+        raw = response_text(response).strip().lstrip("\ufeff")
+        if raw.startswith("```json") or raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        try:
+            result = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError("AI가 유효한 JSON 결과를 반환하지 않았습니다. 요청 결과를 저장하지 않았습니다.") from exc
         if not isinstance(result, dict):
             raise ValueError("AI 결과가 JSON 객체가 아닙니다.")
         return result, {"provider": self.name, "model": self.model, "usage": response.get("usage", {}), "request_id": response.get("id", "")}

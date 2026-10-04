@@ -11,6 +11,24 @@ from contextlib import contextmanager
 from .schema import AnalysisProject, SourceDocument, utc_now
 
 
+def public_project_payload(payload: dict) -> dict:
+    """Drop legacy internal evaluations before a public project can be read or exported."""
+    payload.get("versions", {}).pop("rating_policy", None)
+    narrative = payload.get("narrative", {})
+    had_rating = any(key in narrative for key in ("policy_evaluation", "legacy_company_rating"))
+    for key in ("policy_evaluation", "legacy_company_rating"):
+        narrative.pop(key, None)
+    if had_rating:
+        narrative.pop("final", None)
+        narrative.pop("ai_cache", None)
+    for record in narrative.get("assessment_history", []):
+        record.get("versions", {}).pop("rating_policy", None)
+        if "evaluations" in record:
+            record.pop("evaluations", None)
+            record.pop("report_narrative", None)
+    return payload
+
+
 class ProjectStore:
     def __init__(self, root: str | Path = "data"):
         self.root = Path(root)
@@ -76,7 +94,7 @@ class ProjectStore:
 
     def save(self, project: AnalysisProject, owner_id: str = "local-user") -> None:
         project.touch()
-        payload = json.dumps(project.to_dict(), ensure_ascii=False, separators=(",", ":"))
+        payload = json.dumps(public_project_payload(project.to_dict()), ensure_ascii=False, separators=(",", ":"))
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             current = connection.execute("SELECT owner_id FROM projects WHERE project_id=?", (project.project_id,)).fetchone()
@@ -99,7 +117,7 @@ class ProjectStore:
             row = connection.execute("SELECT payload_json FROM projects WHERE project_id=? AND owner_id=?", (project_id, owner_id)).fetchone()
         if not row:
             raise KeyError("저장된 분석을 찾을 수 없거나 접근 권한이 없습니다.")
-        return AnalysisProject.from_dict(json.loads(row["payload_json"]))
+        return AnalysisProject.from_dict(public_project_payload(json.loads(row["payload_json"])))
 
     def list_projects(self, owner_id: str = "local-user") -> list[dict]:
         with self._connect() as connection:
@@ -136,9 +154,9 @@ class ProjectStore:
         return source, duplicate
 
     def export_project_json(self, project: AnalysisProject) -> bytes:
-        return json.dumps(project.to_dict(), ensure_ascii=False, indent=2).encode("utf-8")
+        return json.dumps(public_project_payload(project.to_dict()), ensure_ascii=False, indent=2).encode("utf-8")
 
     def import_project_json(self, payload: bytes) -> AnalysisProject:
-        project = AnalysisProject.from_dict(json.loads(payload.decode("utf-8")))
+        project = AnalysisProject.from_dict(public_project_payload(json.loads(payload.decode("utf-8"))))
         project.updated_at = utc_now()
         return project

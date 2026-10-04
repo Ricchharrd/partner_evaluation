@@ -8,7 +8,7 @@ import streamlit as st
 
 from .intelligence import collect_sec_updates, merge_updates, public_link, review_update
 from .schema import utc_now
-from .workflow import assessment_rows, is_current, log_action
+from .workflow import is_current, log_action
 
 
 def portfolio(store, owner):
@@ -19,13 +19,12 @@ def portfolio(store, owner):
         return
     rows = []
     for project in projects:
-        evaluations = project.narrative.get("policy_evaluation", [])
-        last = evaluations[-1] if evaluations and is_current(project) else {}
+        years = sorted({fact.fiscal_year for fact in project.facts})
         updates = project.narrative.get("partner_updates", [])
         review = project.narrative.get("review", {})
         rows.append({"기업": project.entity.legal_name, "국가": project.entity.country,
                      "역할": project.narrative.get("partner_role", "미등록"),
-                     "평가연도": last.get("fiscal_year"), "잠정등급": last.get("grade") or "보류/미산정",
+                     "재무자료 연도": years[-1] if years else "미확인",
                      "상태": project.status if is_current(project) else "계산 필요",
                      "최근 검토": review.get("at", "미검토"),
                      "동향 검토대기": sum(u["status"] == "검토 대기" for u in updates),
@@ -41,7 +40,7 @@ def portfolio(store, owner):
         st.session_state.project = projects[selected]
         st.session_state.main_page = "기업 상세"
     st.button("선택 기업 상세 보기", type="primary", on_click=open_selected)
-    st.caption("동향 승인만으로 재무점수는 변경되지 않습니다. 신규 공시는 재무자료 재수집·재검토의 계기입니다.")
+    st.caption("신규 공시는 재무자료 재수집·재검토의 계기입니다. 이 웹은 등급을 산정하지 않습니다.")
     st.subheader("기업 간 재무비율 비교")
     metric = st.selectbox("비교 지표", ["operating_margin", "debt_ratio", "current_ratio", "interest_coverage"],
                           format_func=lambda k: {"operating_margin": "영업이익률 (%)", "debt_ratio": "부채비율 (%)", "current_ratio": "유동비율 (%)", "interest_coverage": "이자보상배율 (배)"}[k])
@@ -52,24 +51,14 @@ def portfolio(store, owner):
 
 
 def assessment(project):
-    st.subheader("재무역량 평가표")
+    st.subheader("공개 재무비율")
     if not is_current(project):
         st.info("자료 입력·검토에서 최신 입력으로 검증 및 계산을 실행하십시오.")
         return
-    rows = assessment_rows(project)
-    if rows:
-        st.dataframe(pd.DataFrame(rows).fillna("미확인").astype(str), hide_index=True, width="stretch")
-    for row in project.narrative.get("policy_evaluation", []):
-        if row.get("reason"):
-            st.warning(f"FY{row.get('fiscal_year', '-')}: {row['reason']}")
-    st.caption("잠정 사내정책 평가. 누락값은 미확인으로 보류합니다. 검토 완료는 공식 신용등급 확정을 의미하지 않습니다.")
-    with st.expander("계산 근거·환율·감점"):
-        st.write("Altman: 장부자본 및 영업이익 대용치. 원형의 시가총액·EBIT 기반 점수와 다릅니다. Z<1이면 -2점, 연속된 2개년 동일 지표(영업CF 또는 순이익) 적자이면 추가 최대 -2점. 공사예가 가점 제외.")
-        st.dataframe(project.narrative.get("fx_display", []), hide_index=True)
-        for row in project.narrative.get("policy_evaluation", []):
-            st.write(f"FY{row.get('fiscal_year', '-')}", row.get("currency_note", ""))
-            st.dataframe(row.get("components", []), hide_index=True)
-            st.write("감점", row.get("adjustments", []))
+    st.dataframe([{"연도": row.fiscal_year, "지표": row.label, "값": row.value,
+                   "산식": row.formula, "상태": row.status} for row in project.ratios],
+                 hide_index=True, width="stretch")
+    st.caption("공개 비율과 검증 상태만 표시합니다. 재무 등급·가중치·감점은 사내 스킬에서만 계산합니다.")
 
 
 def business_panel(project, persist):

@@ -6,7 +6,6 @@ from typing import Iterable
 from .analysis import effective_fact_map, ratio_rows
 from .schema import AnalysisProject, STANDARD_ITEMS, facts_to_rows
 from .validation import validation_rows
-from .workflow import assessment_rows
 
 
 def _literal(value):
@@ -49,7 +48,9 @@ def _write_rows(ws, rows: list[dict]):
 def build_excel(project: AnalysisProject) -> bytes:
     from openpyxl import Workbook
     from openpyxl.styles import Font
+    from .storage import public_project_payload
 
+    project = AnalysisProject.from_dict(public_project_payload(project.to_dict()))
     wb = Workbook()
     meta = wb.active
     meta.title = "분석개요"
@@ -84,20 +85,7 @@ def build_excel(project: AnalysisProject) -> bytes:
             for fact in project.facts if fact.user_value is not None
         ],
     )
-    rating_ws = wb.create_sheet("회사평가표")
-    rating_rows = []
-    for year in project.narrative.get("policy_evaluation", []):
-        for component in year.get("components", []):
-            rating_rows.append(
-                {
-                    "연도": year.get("fiscal_year"), "평가항목": component.get("label"), "값": component.get("value"),
-                    "등급": component.get("grade"), "가중치": component.get("weight"), "가중점수": component.get("weighted_points"),
-                    "비고": component.get("note"), "최종점수": year.get("score"), "최종등급": year.get("grade"),
-                }
-            )
-    _write_rows(rating_ws, rating_rows)
     for name, rows in [
-        ("연도별 평가표", assessment_rows(project)),
         ("사업역량 근거", project.narrative.get("business_evidence", [])),
         ("기업 동향", project.narrative.get("partner_updates", [])),
         ("작업시간", project.narrative.get("effort_log", [])),
@@ -129,18 +117,20 @@ def _add_bullets(document, values: Iterable[str]):
 
 def build_word(project: AnalysisProject) -> bytes:
     from .hitl import current_review
+    from .storage import public_project_payload
     from docx import Document
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.oxml.ns import qn
     from docx.shared import Pt
 
+    project = AnalysisProject.from_dict(public_project_payload(project.to_dict()))
     document = Document()
     styles = document.styles
     styles["Normal"].font.name = "Malgun Gothic"
     styles["Normal"]._element.rPr.rFonts.set(qn("w:eastAsia"), "맑은 고딕")
     styles["Normal"].font.size = Pt(9.5)
 
-    title = document.add_heading("해외 파트너사 기업개요 및 재무평가 보고서", 0)
+    title = document.add_heading("해외 파트너사 공개 재무자료 검토 보고서", 0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     document.add_paragraph(f"대상 법인: {project.entity.legal_name}")
     document.add_paragraph(f"국가 / 업종: {project.entity.country or '미확인'} / {project.entity.industry or '미확인'}")
@@ -152,18 +142,7 @@ def build_word(project: AnalysisProject) -> bytes:
     status = project.status if current_review(project) else "미검토·재확인 필요"
     reviewer = project.narrative.get('review', {}).get('reviewer', '미검토') if current_review(project) else '미검토'
     document.add_paragraph(f"검토 상태: {status} | 검토자: {reviewer}")
-    document.add_heading("재무역량 평가표 (잠정)", level=1)
-    rating_rows = assessment_rows(project)
-    if rating_rows:
-        headers = list(dict.fromkeys(key for row in rating_rows for key in row))
-        rating_table = document.add_table(rows=1, cols=len(headers))
-        rating_table.style = "Table Grid"
-        for cell, header in zip(rating_table.rows[0].cells, headers):
-            _set_cell_text(cell, header)
-        for row in rating_rows:
-            for cell, header in zip(rating_table.add_row().cells, headers):
-                _set_cell_text(cell, row.get(header))
-    document.add_paragraph("환율은 기존 역년 환율표 대용치이며 K-IFRS 완전 환산이 아닙니다. Altman은 장부자본·영업이익 대용치로 원형 시가총액·EBIT 기반 모델과 다릅니다. 미확인 입력 및 감점 조건은 추가 확인이 필요합니다.")
+    document.add_paragraph("이 웹 보고서는 공개 재무값과 비율만 정리합니다. 등급, 가중치, 감점과 최종 판단은 사내 Claude Enterprise 스킬에서 처리합니다.")
 
     narrative = project.narrative.get("final") or project.narrative.get("basic") or {}
     document.add_heading("1. 기업개요", level=1)
@@ -174,7 +153,7 @@ def build_word(project: AnalysisProject) -> bytes:
         document.add_paragraph(str(overview))
     document.add_paragraph(f"평가 대상 법인 식별정보: {project.entity.identifiers or '미확인'}")
     if project.entity.entity_type in {"금융회사", "프로젝트 SPV"}:
-        document.add_paragraph("이 법인은 일반 건설·인프라 기업과 다른 평가기준이 필요하여 종합점수 산정을 보류합니다.")
+        document.add_paragraph("이 법인의 재무비율 해석에는 일반 건설·인프라 기업과 다른 맥락이 필요합니다.")
 
     document.add_heading("2. 최근 재무요약", level=1)
     selected = effective_fact_map(project.facts)

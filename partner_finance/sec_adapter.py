@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from .legacy_sec.sec_edgar_client import CompanyMatch, search_companies
-from .legacy_sec.sec_fx import build_exchange_rates_for_results
-from .legacy_sec.sec_screening import apply_company_ratings, screen_companies
+from .legacy_sec.sec_screening import screen_companies
 from .schema import AnalysisProject, EntityProfile, FinancialFact, SourceDocument
 
 
@@ -53,7 +52,7 @@ def collect_sec_project(match: CompanyMatch, start_year: int, end_year: int) -> 
         reporting_scope="연결",
         accounting_standard="US GAAP",
     )
-    project = AnalysisProject(title=f"{match.company_name} 재무평가", entity=entity)
+    project = AnalysisProject(title=f"{match.company_name} 공개 재무분석", entity=entity)
     source = SourceDocument(
         name=f"SEC companyfacts CIK {match.cik}",
         source_type="SEC API",
@@ -89,23 +88,6 @@ def collect_sec_project(match: CompanyMatch, start_year: int, end_year: int) -> 
                 )
             )
 
-    try:
-        exchange_rates = build_exchange_rates_for_results(results)
-        apply_company_ratings(results, exchange_rates)
-        project.narrative["legacy_company_rating"] = [
-            {
-                "fiscal_year": result.fiscal_year,
-                "score": result.rating.get("weighted_score"),
-                "grade": result.rating.get("final_grade"),
-                "components": result.rating.get("components", []),
-                "adjustments": result.rating.get("score_adjustments", []),
-                "fx": result.rating.get("exchange_rates", {}),
-            }
-            for result in results
-        ]
-    except (ValueError, KeyError) as exc:
-        warnings.append(f"내부 평가는 환율표 범위를 벗어나 보류되었습니다: {exc}")
-
     if entity.entity_type == "금융회사":
-        warnings.append("금융회사 SIC로 식별되었습니다. 일반 건설·인프라 평가기준을 적용하지 않고 별도 기준 필요로 표시합니다.")
+        warnings.append("금융회사 SIC로 식별되었습니다. 재무비율의 해석에는 별도 기준이 필요합니다.")
     return project, warnings

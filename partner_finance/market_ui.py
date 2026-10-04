@@ -8,6 +8,8 @@ from .market_news import (TOPICS, FEATURED_COMPANIES, add_company, collect_news,
                           company_roles, ensure_featured_companies, featured_company, saved_articles)
 from .openai_provider import DEFAULT_OPENAI_MODEL
 from .hitl import render_hitl, clear_action_tickets
+from .handoff import build_claude_start
+from .public_gpt import build_public_gpt_packet
 
 
 def open_financials(project):
@@ -37,8 +39,8 @@ def company_identity(project, topic=None, *, card=False):
     parts.append('<span class="company-name">' + escape(project.entity.legal_name) + '</span>')
     roles = company_roles(project)
     for role in roles:
-        style = " company-role-investor" if role == "투자" else ""
-        parts.append('<span class="company-role' + style + '">' + escape(role) + '</span>')
+        role_style = " company-role-investor" if role == "투자" else ""
+        parts.append('<span class="company-role' + role_style + '">' + escape(role) + '</span>')
     if not roles:
         parts.append('<span class="company-role company-role-unknown">역할 미확인</span>')
     return "".join(parts) + "</div>"
@@ -70,8 +72,7 @@ def render_market(store, owner, secret, *, management=False, can_input=True):
         return (featured_order.get(profile["name"] if profile else None, len(featured_order)),
                 project.entity.legal_name.casefold())
 
-    watched = sorted((p for p in projects if p.narrative.get("market_watch")),
-                     key=watch_order)
+    watched = sorted((p for p in projects if p.narrative.get("market_watch")), key=watch_order)
     if management:
         st.title("관심 기업 관리")
         st.caption("살펴볼 기업을 등록하고, 대시보드에서 뉴스를 확인하세요.")
@@ -89,8 +90,8 @@ def render_market(store, owner, secret, *, management=False, can_input=True):
         st.subheader("첫 관심 기업을 등록해 보세요")
         st.caption("한 번 수집한 뉴스는 다시 검색하지 않고 계속 읽을 수 있습니다.")
         company_registration(store, owner, can_input)
-        cols = st.columns(3)
-        for col, name in zip(cols, ("Webuild", "Acciona", "Rönesans Holding")):
+        cols = st.columns(2)
+        for col, name in zip(cols, ("Acciona", "Webuild")):
             if col.button(f"{name} 추가", width="stretch", disabled=not can_input) and can_input:
                 p = add_company(store, owner, name)
                 st.session_state.market_company = p.project_id
@@ -102,14 +103,14 @@ def render_market(store, owner, secret, *, management=False, can_input=True):
     if st.session_state.get("market_company") not in ["all", *by_id]:
         st.session_state.market_company = "all"
     chosen = st.pills("기업 선택", ["all", *by_id], key="market_company",
-                      format_func=lambda key: "전체 기업" if key == "all" else
-                      f"{by_id[key].entity.legal_name} · {'·'.join(company_roles(by_id[key])) or '역할 미확인'}")
+                          format_func=lambda key: "전체 기업" if key == "all" else
+                          f"{by_id[key].entity.legal_name} · {'·'.join(company_roles(by_id[key])) or '역할 미확인'}")
     selected = by_id.get(chosen)
     if selected:
         st.markdown(company_identity(selected), unsafe_allow_html=True)
         st.caption("공개 사업 설명 기준의 역할 태그입니다. 개별 사업의 계약상 역할은 별도 확인이 필요합니다.")
     else:
-        st.caption("회사를 선택하면 뉴스 업데이트와 재무 상세분석을 진행할 수 있습니다.")
+        st.caption("기업을 선택하면 저장된 뉴스와 다음 작업을 볼 수 있습니다.")
         columns = st.columns(min(len(watched), 3))
         for index, project in enumerate(watched):
             with columns[index % len(columns)]:
@@ -122,14 +123,14 @@ def render_market(store, owner, secret, *, management=False, can_input=True):
     if pending and (not selected or pending["project_id"] != selected.project_id):
         st.session_state.pop("hitl_pending", None)
     has_packet = bool(selected and selected.narrative.get("research_briefs"))
-    actions = st.columns([1.4, 1, 1.4, 1.4] if has_packet else [1.4, 1, 1.4], gap="small")
-    actions[0].button("전체 기업 소식", on_click=show_all_companies, width="stretch")
     remaining = store.news_refresh_remaining(selected.project_id, owner) if selected else 0
-    run = actions[1].button("업데이트", type="primary", width="stretch",
-                            disabled=not selected or not can_input or remaining > 0 or not secret("OPENAI_API_KEY"))
-    actions[2].button("재무 상세분석", width="stretch", on_click=open_financials,
-                      args=(selected,), disabled=selected is None or not can_input)
+    run = False
     if selected:
+        actions = st.columns(2, gap="small")
+        run = actions[0].button("뉴스 업데이트 (유료)", type="primary", width="stretch",
+                                disabled=not can_input or remaining > 0 or not secret("OPENAI_API_KEY"))
+        actions[1].button("재무 상세분석", width="stretch", on_click=open_financials,
+                          args=(selected,), disabled=not can_input)
         persist = lambda: store.save(selected, owner)
         approved = render_hitl(selected, persist, show_review=False, allowed_actions=["market_news"]) if can_input else None
         checked = selected.narrative.get("market_last_checked")
@@ -154,19 +155,18 @@ def render_market(store, owner, secret, *, management=False, can_input=True):
                 st.error("뉴스 업데이트를 완료하지 못했습니다. 기존 뉴스는 유지됩니다. 연결, 사용 한도 또는 뉴스 출처를 확인해 주세요.")
             finally:
                 clear_action_tickets(selected)
-        if selected.narrative.get("research_briefs"):
-            try:
-                from .handoff import build_claude_start
-                news_packet = deepcopy(selected)
-                news_packet.narrative["analysis_route"] = "news_only"
-                packet = build_claude_start(news_packet)
-            except ImportError:
-                st.error("Claude 전달자료를 생성할 수 없습니다. 배포 모듈 상태를 확인해 주세요.")
-            else:
-                actions[3].download_button("Claude 전달자료", packet,
-                                           "00_claude_start.md", "text/markdown", on_click="ignore", width="stretch")
+        if has_packet:
+            news_packet = deepcopy(selected)
+            news_packet.narrative["analysis_route"] = "news_only"
+            exports = st.columns(2, gap="small")
+            exports[0].download_button("사내 Claude 전달자료", build_claude_start(news_packet),
+                                       "00_claude_start.md", "text/markdown", on_click="ignore", width="stretch")
+            if saved_articles(selected):
+                exports[1].download_button("웹 ChatGPT용 공개 뉴스", build_public_gpt_packet(selected),
+                                           "00_public_chatgpt_news.md", "text/markdown", on_click="ignore", width="stretch")
+                st.caption("ChatGPT 파일에는 공개 뉴스만 담습니다. 외부에 붙여넣거나 첨부하기 전 회사 정책과 내용의 공개 가능성을 확인하세요.")
     else:
-        st.caption("전체 기업의 저장 뉴스를 최신순으로 보여줍니다. 업데이트와 분석은 기업을 선택한 뒤 실행하세요.")
+        st.caption("전체 기업의 저장 뉴스를 최신순으로 보여줍니다. 갱신과 분석은 위에서 기업을 선택한 뒤 실행하세요.")
     if st.session_state.get("market_notice"):
         st.info(st.session_state.pop("market_notice"))
 

@@ -5,3 +5,4 @@ __pycache__/
 .streamlit/secrets.toml
 data/
 test-output/
+deliverables/*.zip

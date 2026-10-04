@@ -1,5 +1,4 @@
 from datetime import date
-from pathlib import Path
 import streamlit as st
 
 from .schema import AnalysisProject, EntityProfile
@@ -11,6 +10,8 @@ from .reports import build_word, build_excel
 from .research import research_company_openai
 from .market_news import has_saved_news
 from .openai_provider import OpenAIProvider, DEFAULT_OPENAI_MODEL
+from .handoff import build_handoff, packet_content, build_claude_start
+from .public_gpt import build_public_gpt_packet
 from .discovery import find_candidates, collect_latest
 from .hitl import (authorize_request, render_hitl, render_evidence_review, current_review,
                    clear_action_tickets, quick_review_blocker, record_quick_review)
@@ -24,28 +25,29 @@ def next_step(project, index):
 
 
 def render_downloads(project, news_only):
-    try:
-        from .handoff import build_handoff, packet_content, build_claude_start
-    except ImportError:
-        st.error("Claude 전달자료를 생성할 수 없습니다. 배포 모듈 상태를 확인해 주세요.")
-        return
-    st.download_button("Claude 전달자료 받기", build_claude_start(project), "00_claude_start.md",
-                       "text/markdown", width="stretch", type="primary", on_click="ignore")
+    downloads = st.columns(2, gap="small")
+    downloads[0].download_button("사내 Claude 전달자료", build_claude_start(project), "00_claude_start.md",
+                                 "text/markdown", width="stretch", type="primary", on_click="ignore")
+    if has_saved_news(project):
+        downloads[1].download_button("웹 ChatGPT용 공개 뉴스", build_public_gpt_packet(project),
+                                     "00_public_chatgpt_news.md", "text/markdown", width="stretch", on_click="ignore")
+        st.caption("웹 ChatGPT용 파일에는 공개 뉴스만 담습니다. 업로드 전 회사 정책과 기업명·기사 내용의 공개 가능성을 확인하세요.")
     st.caption("원문 검토 기록이 포함된 자료입니다. 최종 판단은 사내 Claude에서 합니다." if current_review(project)
                else "미검토 초안입니다. 사내 Claude에서 원문 확인과 최종 검토를 진행하세요.")
-    with st.expander("사용 방법 · Word/Excel · 스킬 설치"):
+    if project.facts and not news_only:
+        st.download_button("공개 재무검토 Word 초안", build_word(project), "public_financial_review.docx",
+                           "application/vnd.openxmlformats-officedocument.wordprocessingml.document", on_click="ignore")
+        st.caption("이 Word는 공개 재무 검토표입니다. 협업 적합성의 최종 점수·승인 보고서와는 다릅니다.")
+    with st.expander("추가 파일 · 사용 방법 · 스킬 설치"):
         st.write("받은 00_claude_start.md 하나를 사내 Claude에 첨부하면 됩니다. 스킬이 보고서 초안을 작성하고 중요한 예외만 질문합니다.")
         st.caption("비공개 재무제표는 사내 Claude에만 첨부하며, 내부 결과는 이 웹에 다시 올리지 않습니다.")
-        st.caption("아래 Word·Excel은 공개자료 예비 산출물입니다. 내부 맥락을 결합한 최종 보고서는 사내 Claude에서 작성합니다.")
+        st.caption("Excel과 아래 파일은 공개자료 예비 산출물입니다. 내부 맥락을 결합한 최종 보고서는 사내 Claude에서 작성합니다.")
         st.download_button("전체 근거 ZIP (필요할 때만)", build_handoff(project), "claude_review_packet.zip", "application/zip", on_click="ignore")
         if project.facts and not news_only:
-            st.download_button("Word 보고서", build_word(project), "partner_report.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", on_click="ignore")
             st.download_button("Excel 재무표", build_excel(project), "partner_financials.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", on_click="ignore")
         brief, _ = packet_content(project)
         st.download_button("요약 파일", brief, "01_review_brief.md", "text/markdown", on_click="ignore")
-        skill_zip = Path(__file__).resolve().parents[1] / "deliverables" / "partner-review-skill.zip"
-        if skill_zip.is_file():
-            st.download_button("사내 Claude 스킬 받기", skill_zip.read_bytes(), "partner-review-skill.zip", "application/zip", on_click="ignore")
+        st.caption("사내 Claude 스킬은 내부 배포 경로에서만 설치합니다. 공개 웹에서는 제공하지 않습니다.")
 
 
 def render(store, owner, secret, panels):
@@ -101,7 +103,7 @@ def render(store, owner, secret, panels):
                     selected = st.selectbox("어느 기업인가요?", range(len(matches)), format_func=lambda i: matches[i]["label"])
                 if st.button("평가 시작", type="primary"):
                     try:
-                        with st.spinner("3개년 자료 수집 → 재무검증 → 평가표 작성 중입니다..."):
+                        with st.spinner("3개년 자료 수집 → 재무검증 → 비율 계산 중입니다..."):
                             collected, warnings = collect_latest(matches[selected], secret("DART_API_KEY"))
                             recalculate(collected)
                             collected.narrative["collection_warnings"] = warnings
@@ -254,7 +256,7 @@ def render(store, owner, secret, panels):
         st.success(f"재무수치 {len(project.facts)}건이 저장돼 있습니다. 같은 보고서를 다시 올릴 필요가 없습니다.")
     if reprocess:
         if project.sources and not project.facts:
-            st.warning("재무수치 추출 0건: 원문만 저장된 상태입니다. 아직 평가표·보고서를 만들 수 없습니다. 같은 파일을 다시 선택해 분석하거나 재무제표가 포함된 다른 파일을 올려 주세요.")
+            st.warning("재무수치 추출 0건: 원문만 저장된 상태입니다. 아직 재무비율·보고서를 만들 수 없습니다. 같은 파일을 다시 선택해 분석하거나 재무제표가 포함된 다른 파일을 올려 주세요.")
         st.info("공개된 연차보고서·재무제표를 올려 주세요. 보고서가 없거나 비공개 자료만 있다면 위에서 ‘공개 현안만’ 경로를 선택하세요.")
         public_file = st.checkbox("공개된 재무보고서입니다. 비공개·거래처 제공 자료는 업로드하지 않습니다.")
         upload = st.file_uploader("공개 재무보고서 파일", type=["pdf", "xlsx", "csv"], disabled=not public_file)

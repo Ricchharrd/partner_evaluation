@@ -109,6 +109,7 @@ def generate_project_narrative(project: AnalysisProject, provider: AIProvider) -
 제공된 확정 재무값과 출처만 사용한다. 산술을 다시 계산하거나 숫자를 바꾸지 않는다.
 관찰된 사실과 원인 해석을 구분하고, 원인 근거가 없으면 '미확인'이라고 쓴다.
 금융회사 또는 SPV에는 일반기업 평가를 적용하지 말고 별도 기준 필요를 명시한다.
+등급, 점수, 가중치, 감점 또는 협업 적합성을 계산하거나 추정하지 않는다. 이 작업은 사내 Claude 스킬과 담당자의 범위다.
 반드시 JSON 객체만 반환한다. 키는 company_overview, observed_facts, interpretation,
 review_points, limitations, source_citations이며 목록 항목은 간결한 한국어 문장이어야 한다."""
     result, meta = provider.generate_json(system, payload, max_tokens=3500)

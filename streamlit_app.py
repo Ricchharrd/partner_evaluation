@@ -18,7 +18,6 @@ from partner_finance.hitl import authorize_request
 from partner_finance.analysis import build_basic_narrative, calculate_ratios, ratio_rows
 from partner_finance.dart_adapter import collect_dart_project, search_dart_companies
 from partner_finance.ingest import download_public_document, parse_uploaded_file, sample_csv_bytes
-from partner_finance.policy import evaluate_company_policy
 from partner_finance.reports import build_excel, build_word
 from partner_finance.schema import AnalysisProject, EntityProfile, FinancialFact, STANDARD_ITEMS, facts_to_rows
 from partner_finance.sec_adapter import candidate_rows, collect_sec_project
@@ -131,7 +130,7 @@ def new_project_panel():
             st.error("법인명을 입력하십시오.")
         else:
             entity = EntityProfile(legal_name=legal_name.strip(), country=country.strip(), entity_type=entity_type, reporting_scope=scope, accounting_standard=standard, industry=industry.strip())
-            st.session_state.project = AnalysisProject(title=f"{legal_name.strip()} 재무평가", entity=entity)
+            st.session_state.project = AnalysisProject(title=f"{legal_name.strip()} 공개 재무분석", entity=entity)
             st.rerun()
 
 
@@ -317,7 +316,7 @@ def review_panel(project: AnalysisProject):
 
 
 def validation_analysis_panel(project: AnalysisProject):
-    st.subheader("3. 검증·재무비율·평가")
+    st.subheader("3. 검증·재무비율")
     c1, c2 = st.columns([1, 3])
     if c1.button("검증 및 계산 실행", type="primary", disabled=not project.facts):
         recalculate(project)
@@ -325,7 +324,7 @@ def validation_analysis_panel(project: AnalysisProject):
         st.rerun()
     if not project.validations and project.facts:
         st.info("검증 및 계산 실행을 눌러 최신 수정값을 반영하십시오.")
-    tab1, tab2, tab3 = st.tabs(["검증 경고", "재무비율", "회사 평가표"])
+    tab1, tab2 = st.tabs(["검증 경고", "재무비율"])
     with tab1:
         if project.validations:
             st.dataframe(validation_rows(project.validations), hide_index=True, width="stretch")
@@ -338,19 +337,7 @@ def validation_analysis_panel(project: AnalysisProject):
             chart_df = ratio_df[ratio_df["지표"].isin(["영업이익률", "순이익률", "부채비율", "유동비율"])].pivot(index="연도", columns="지표", values="값")
         else:
             st.caption("계산 결과 없음")
-    with tab3:
-        evaluations = project.narrative.get("policy_evaluation") or []
-        if not evaluations:
-            st.caption("평가 결과 없음")
-        elif evaluations and evaluations[0].get("status") == "별도 기준 필요":
-            st.warning(evaluations[0]["reason"])
-        else:
-            for evaluation in evaluations:
-                with st.expander(f"FY{evaluation.get('fiscal_year')} · {evaluation.get('grade') or '평가 보류'} · {evaluation.get('score') if evaluation.get('score') is not None else '-'}점", expanded=True):
-                    if evaluation.get("reason"):
-                        st.warning(evaluation["reason"])
-                    st.dataframe(evaluation.get("components") or [], hide_index=True, width="stretch")
-                    st.caption(f"Altman Z: {evaluation.get('altman_z', '-')} | {evaluation.get('currency_note', '')}")
+    st.caption("웹은 공개 재무값과 비율만 정리합니다. 사내 등급 산정은 Claude Enterprise 스킬에서만 수행합니다.")
 
 
 def ai_report_panel(project: AnalysisProject):
@@ -416,7 +403,7 @@ def export_panel(project: AnalysisProject):
         return
     reviewer = st.text_input("최종 검토자")
     review_note = st.text_area("검토의견 및 미확인 항목 처리")
-    acknowledged = st.checkbox("환율·Z-score 대용치와 미확인 항목을 확인했으며 예비검토 자료로 사용합니다.")
+    acknowledged = st.checkbox("환율 대용치와 미확인 항목을 확인했으며 공개자료 예비검토로 사용합니다.")
     c1, c2 = st.columns(2)
     if c1.button("검토 완료로 표시", disabled=not project.facts or not acknowledged):
         try:
@@ -435,7 +422,7 @@ def export_panel(project: AnalysisProject):
         d1, d2, d3 = st.columns(3)
         safe_name = "".join(ch if ch.isalnum() else "_" for ch in project.entity.legal_name)[:40]
         d1.download_button("Excel 분석표", excel, f"{safe_name}_재무분석.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch")
-        d2.download_button("Word 보고서", word, f"{safe_name}_재무평가.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", width="stretch")
+        d2.download_button("Word 보고서", word, f"{safe_name}_공개재무검토.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", width="stretch")
         d3.download_button("분석 백업 JSON", project_json, f"{safe_name}_분석백업.json", "application/json", width="stretch")
     except Exception as exc:
         st.error(f"산출물 생성 실패: {exc}")

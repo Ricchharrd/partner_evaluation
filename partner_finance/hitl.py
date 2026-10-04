@@ -16,7 +16,6 @@ def review_digest(project):
         "research": project.narrative.get("research_briefs", []),
         "business": project.narrative.get("business_evidence", []),
         "updates": project.narrative.get("partner_updates", []),
-        "policy": project.narrative.get("policy_evaluation", []),
         "warnings": project.narrative.get("collection_warnings", []),
         "route": project.narrative.get("analysis_route", "public_financials"),
         "ratios": [r.__dict__ for r in project.ratios],
@@ -177,13 +176,13 @@ def render_evidence_review(project, persist, *, include_fact_review=True):
         for v in project.validations:
             if v.severity in {"오류", "경고"}:
                 st.write(f"{v.severity} FY{v.fiscal_year}: {v.message}")
-        st.caption("환율·Altman 대용치, APM, 누락값의 제한을 유지합니다. 승인만으로 수치를 바꾸거나 오류를 해제하지 않습니다.")
+        st.caption("환율 대용치, APM, 누락값의 제한을 유지합니다. 승인만으로 수치를 바꾸거나 오류를 해제하지 않습니다.")
         digest = review_digest(project)
         with st.form("review_" + digest[:16]):
             reviewer = st.text_input("검토 담당자")
             identity = st.checkbox("법인·자료 종류·회계기간·연결/별도 기준을 확인했습니다.")
             numbers = st.checkbox("핵심 수치와 원문 근거·통화·단위를 대조했습니다." if include_fact_review else "공개 현안의 원문 출처·발표일·사건일을 확인했습니다. 재무평가는 사내에서 별도 수행합니다.")
-            exceptions = st.checkbox("누락·APM·환율·Z-score 등 예외와 평가 보류 범위를 확인했습니다.")
+            exceptions = st.checkbox("누락·APM·환율 등 예외와 분석 보류 범위를 확인했습니다.")
             business = st.checkbox("사업정보의 사실/해석을 구분하고 미검토 자료는 보류했습니다.")
             note = st.text_area("항목별 확인 내용·미해결 사항·추가 자료·조치 담당자")
             decision = st.selectbox("처리", ["보류 · 자료 보완", "검토 확인 · 한계 유지"])

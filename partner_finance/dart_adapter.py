@@ -94,7 +94,7 @@ def collect_dart_project(api_key: str, company: dict, start_year: int, end_year:
         reporting_scope="연결" if scope == "CFS" else "별도",
         accounting_standard="K-IFRS",
     )
-    project = AnalysisProject(title=f"{entity.legal_name} 재무평가", entity=entity)
+    project = AnalysisProject(title=f"{entity.legal_name} 공개 재무분석", entity=entity)
     source = SourceDocument(
         name=f"OpenDART 단일회사 전체 재무제표 {company['corp_code']}",
         source_type="OpenDART API",

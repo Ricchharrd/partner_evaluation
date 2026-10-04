@@ -146,7 +146,6 @@ class AnalysisProject:
             "validator": "1.0",
             "ratio_engine": "1.0",
             "prompt": "1.0",
-            "rating_policy": "company-policy-2026-01",
         }
     )
 

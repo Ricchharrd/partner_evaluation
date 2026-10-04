@@ -17,7 +17,7 @@ from .hitl import (authorize_request, render_hitl, render_evidence_review, curre
                    clear_action_tickets, quick_review_blocker, record_quick_review)
 
 
-FINANCE_UI_VERSION = 2
+FINANCE_UI_VERSION = 3
 STEPS = ["1. 자료 준비", "2. 결과 확인"]
 
 

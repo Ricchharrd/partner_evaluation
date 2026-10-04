@@ -11,6 +11,8 @@ from .validation import validate_facts
 from .legacy_sec.sec_fx import HARDCODED_USD_KRW_RATES
 from .account_guards import normalize_scope
 
+WORKFLOW_VERSION = 2
+
 
 def filter_interim_comparatives(existing, incoming):
     """Keep an existing full year intact when a later interim filing repeats prior-year columns."""

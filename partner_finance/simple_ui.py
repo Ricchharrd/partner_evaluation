@@ -4,7 +4,7 @@ import streamlit as st
 from .schema import AnalysisProject, EntityProfile
 from .sec_adapter import candidate_rows, collect_sec_project
 from .dart_adapter import search_dart_companies, collect_dart_project
-from .workflow import recalculate, is_current, log_action
+from .workflow import recalculate, is_current, log_action, filter_interim_comparatives
 from .dashboard import assessment, portfolio
 from .reports import build_word, build_excel
 from .research import research_company_openai
@@ -288,6 +288,9 @@ def render(store, owner, secret, panels):
                                 cache=project.narrative.setdefault("extraction_cache", {}), force_refresh=force_refresh)
                             project.narrative.setdefault("api_usage", []).append(meta)
                             warnings.extend(ai_warnings)
+                            facts, period_warnings = filter_interim_comparatives(
+                                [fact for fact in project.facts if fact.source_id != source.source_id], facts)
+                            warnings.extend(period_warnings)
                         else:
                             warnings.append("PDF 자동 수치 추출은 OPENAI_API_KEY 설정이 필요합니다. 현재 원문만 저장했습니다.")
                         if facts:

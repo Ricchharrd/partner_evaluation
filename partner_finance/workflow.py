@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import date
 import hashlib
 import json
 
@@ -9,6 +10,35 @@ from .schema import utc_now, ValidationIssue
 from .validation import validate_facts
 from .legacy_sec.sec_fx import HARDCODED_USD_KRW_RATES
 from .account_guards import normalize_scope
+
+
+def filter_interim_comparatives(existing, incoming):
+    """Keep an existing full year intact when a later interim filing repeats prior-year columns."""
+    if not incoming:
+        return incoming, []
+
+    def duration(fact):
+        if not fact.period_start or not fact.period_end or fact.period_start == fact.period_end:
+            return None
+        try:
+            return (date.fromisoformat(fact.period_end) - date.fromisoformat(fact.period_start)).days
+        except ValueError:
+            return None
+
+    flow_items = {"revenue", "operating_income", "net_income", "operating_cash_flow"}
+    latest_year = max(fact.fiscal_year for fact in incoming)
+    is_interim = any(fact.fiscal_year == latest_year and fact.standard_item in flow_items
+                     and (days := duration(fact)) is not None and 0 < days < 330 for fact in incoming)
+    if not is_interim:
+        return incoming, []
+    annual_contexts = {(fact.fiscal_year, fact.reporting_scope, fact.currency) for fact in existing
+                       if fact.standard_item in flow_items and (days := duration(fact)) is not None
+                       and 330 <= days <= 380}
+    kept = [fact for fact in incoming if not (fact.fiscal_year < latest_year and
+            (fact.fiscal_year, fact.reporting_scope, fact.currency) in annual_contexts)]
+    omitted = len(incoming) - len(kept)
+    warning = [f"기존 연간 실적과 혼합하지 않도록 반기 보고서의 전년 비교값 {omitted}건을 저장에서 제외했습니다."] if omitted else []
+    return kept, warning
 
 
 def input_digest(project):
@@ -87,4 +117,3 @@ def finalize(project, reviewer, note):
     })
     project.status = "검토 완료"
     log_action(project, "검토 완료", f"{reviewer}: {note}")
-

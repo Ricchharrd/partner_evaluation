@@ -23,7 +23,7 @@ from partner_finance.schema import AnalysisProject, EntityProfile, FinancialFact
 from partner_finance.sec_adapter import candidate_rows, collect_sec_project
 from partner_finance.storage import ProjectStore
 from partner_finance.validation import validate_facts, validation_rows
-from partner_finance.workflow import recalculate, invalidate, is_current, finalize, log_action
+from partner_finance.workflow import recalculate, invalidate, is_current, finalize, log_action, filter_interim_comparatives
 from partner_finance.dashboard import portfolio, assessment, business_panel, updates_panel, effort_panel
 
 
@@ -360,6 +360,8 @@ def ai_report_panel(project: AnalysisProject):
                     facts, warnings, meta = extract_facts_from_text(text, project.entity.entity_id, source, provider,
                         default_scope=project.entity.reporting_scope, cache=project.narrative.setdefault("extraction_cache", {}))
                     project.narrative.setdefault("api_usage", []).append(meta)
+                    facts, period_warnings = filter_interim_comparatives(project.facts, facts)
+                    warnings.extend(period_warnings)
                     project.facts.extend(facts)
                     added += len(facts)
                     if facts:

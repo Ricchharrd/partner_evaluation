@@ -1,7 +1,7 @@
 """Local, bounded selection of statement blocks; never calls an AI service."""
 import re
 
-SELECTION_VERSION = "statements-3"
+SELECTION_VERSION = "statements-4"
 DEFAULT_BUDGET = 36_000
 TERMS = ("balance sheet", "financial position", "income statement", "profit or loss",
          "cash flow", "changes in equity", "interest expense", "finance costs",
@@ -47,7 +47,7 @@ def select_financial_text(text, budget=DEFAULT_BUDGET):
     if complete:
         start, group = min(complete, key=lambda pair: pair[0])
         # A complete contiguous set beats disconnected subsidiaries/notes.
-        candidates = list(range(max(0, start - 1), min(len(pages), max(group) + 3)))
+        candidates = list(range(start, min(len(pages), max(group) + 3)))
     else:
         candidates = list(primary)
         for i in primary:

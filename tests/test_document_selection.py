@@ -18,6 +18,7 @@ class DocumentSelectionTests(unittest.TestCase):
 
     def test_spaced_korean_statement_titles_beat_subsidiary_notes(self):
         text = "[PAGE 2]\n목 차 연결재무제표 110 연결재무제표 주석 116\n"
+        text += "[PAGE 5]\n별도 재무요약 " + "매출 2026 999 " * 15
         text += "[PAGE 6]\n반 기 연 결 재 무 상 태 표 " + "자산 2026 100 " * 15
         text += "[PAGE 7]\n부채와자본총계 " + "2026 100 " * 8
         text += "[PAGE 8]\n반 기 연 결 포 괄 손 익 계 산 서 " + "매출액 2026 50 " * 15
@@ -27,4 +28,5 @@ class DocumentSelectionTests(unittest.TestCase):
         selected, _ = select_financial_text(text)
         for page in (6, 7, 8, 10):
             self.assertIn(f"[PAGE {page}]", selected)
+        self.assertNotIn("[PAGE 5]", selected)
         self.assertNotIn("[PAGE 23]", selected)

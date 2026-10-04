@@ -17,7 +17,7 @@ from .hitl import (authorize_request, render_hitl, render_evidence_review, curre
                    clear_action_tickets, quick_review_blocker, record_quick_review)
 
 
-STEPS = ["1. 자료 준비", "2. 결과 확인", "3. 사내 전달"]
+STEPS = ["1. 자료 준비", "2. 결과 확인"]
 
 
 def next_step(project, index):
@@ -61,7 +61,18 @@ def render(store, owner, secret, panels):
     project = st.session_state.project
     if project is None:
         st.subheader("어느 기업을 살펴볼까요?")
-        st.write("기업명 하나로 시작하세요. 공개 보고서가 있으면 바로 올리고, 없으면 공개 기사만 조사할 수 있습니다.")
+        saved = store.list_projects(owner)
+        if saved:
+            st.caption("등록된 회사를 고르면 바로 이어서 분석할 수 있습니다.")
+            for row in saved:
+                c1, c2 = st.columns([4, 1])
+                c1.write(f"**{row['legal_name']}** · {row['status']}")
+                saved_project = store.load(row["project_id"], owner)
+                label = "결과 보기" if saved_project.facts or saved_project.narrative.get("research_briefs") else "분석하기"
+                if c2.button(label, key=f"open_{row['project_id']}", width="stretch"):
+                    st.session_state.project = saved_project
+                    st.rerun()
+        st.write("목록에 없다면 기업명 하나로 시작하세요. SEC·DART 조회는 필요한 경우에만 사용합니다.")
         with st.form("quick_search"):
             query = st.text_input("기업명", placeholder="예: Acciona, Webuild")
             direct = st.form_submit_button("이 기업으로 시작", type="primary")
@@ -115,15 +126,7 @@ def render(store, owner, secret, panels):
             if st.button(f"‘{result['query']}’ 공개자료로 계속하기"):
                 st.session_state.project = AnalysisProject(f"{result['query']} 평가", EntityProfile(result["query"]))
                 st.rerun()
-        saved = store.list_projects(owner)
         if saved:
-            st.subheader("이전에 살펴본 기업")
-            for row in saved:
-                c1, c2 = st.columns([4, 1])
-                c1.write(f"**{row['legal_name']}** · {row['status']}")
-                if c2.button("결과 보기", key=f"open_{row['project_id']}", width="stretch"):
-                    st.session_state.project = store.load(row["project_id"], owner)
-                    st.rerun()
             with st.expander("여러 기업 비교"):
                 portfolio(store, owner)
         st.caption("공시 검색 없이 시작할 수 있습니다. 공개 재무보고서를 올리거나 공개 기사만 조사하세요.")
@@ -138,14 +141,15 @@ def render(store, owner, secret, panels):
                 st.rerun()
         return
 
-    st.button("다른 기업 보기", on_click=home)
-    st.subheader(project.entity.legal_name)
+    company_col, switch_col = st.columns([4, 1])
+    company_col.subheader(project.entity.legal_name)
+    switch_col.button("다른 기업 보기", on_click=home, width="stretch")
     routes = ["공개 재무제표 + 공개 현안", "공개 현안만 · 비공개 재무제표는 사내 Claude"]
     existing_results = bool(project.facts or project.narrative.get("research_briefs"))
     route_container = st.expander("분석 경로 변경", expanded=False) if existing_results else st.container()
     with route_container:
         route = st.radio("분석 경로", routes, index=1 if project.narrative.get("analysis_route") == "news_only" else 0,
-                         key=f"route_{project.project_id}")
+                         key=f"route_{project.project_id}", horizontal=True)
     news_only = route == routes[1]
     project.narrative["analysis_route"] = "news_only" if news_only else "public_financials"
     if news_only and not existing_results:
@@ -160,31 +164,22 @@ def render(store, owner, secret, panels):
     has_results = bool(project.narrative.get("research_briefs") or (project.facts and not news_only))
     step_key = f"step_{project.project_id}"
     st.session_state.setdefault(step_key, STEPS[1] if has_results else STEPS[0])
+    if st.session_state[step_key] not in STEPS:
+        st.session_state[step_key] = STEPS[1] if has_results else STEPS[0]
     # Set before the navigation widget is created, including after a completed upload.
     requested_step = st.session_state.pop(f"next_step_{project.project_id}", None)
     if requested_step is not None:
         st.session_state[step_key] = STEPS[requested_step]
-    with st.expander("다른 단계로 이동", expanded=False):
-        stage = st.radio("진행 단계", STEPS, key=step_key, horizontal=True)
+    if has_results:
+        with st.expander("다른 단계로 이동", expanded=False):
+            stage = st.radio("진행 단계", STEPS, key=step_key, horizontal=True)
+    else:
+        stage = STEPS[0]
     approved_action = render_hitl(project, persist, include_fact_review=not news_only, show_review=False,
                                  allowed_actions=(["research"] + ([] if news_only else ["upload"])) if stage == STEPS[0] else [])
 
-    if stage == STEPS[2]:
-        st.subheader("사내 Claude에서 검토를 마무리하세요")
-        if not has_results:
-            st.info("전달할 자료가 아직 없습니다. 먼저 공개 보고서 분석이나 기사 조사를 진행해 주세요.")
-            st.button("자료 준비로 이동", on_click=next_step, args=(project, 0))
-            return
-        if not current_review(project):
-            st.warning("아직 원문·근거 확인이 끝나지 않았습니다. 내려받는 파일은 승인본이 아닌 검토용 초안입니다.")
-            st.button("결과 확인으로 이동", on_click=next_step, args=(project, 1))
-        else:
-            st.success("현재 자료의 확인 기록이 있습니다. 최종 내부 판단은 사내 Claude에서 진행하세요.")
-        render_downloads(project, news_only)
-        return
-
     if stage == STEPS[1]:
-        st.subheader("분석 결과")
+        st.subheader("분석 결과와 사내 전달자료")
         if not has_results:
             st.info("확인할 결과가 아직 없습니다. 자료 준비 단계에서 분석을 시작해 주세요.")
             st.button("자료 준비로 이동", on_click=next_step, args=(project, 0))
@@ -194,7 +189,7 @@ def render(store, owner, secret, panels):
         if errors:
             st.error(f"수치 오류 {errors}건을 먼저 확인해 주세요. 검토 승인만으로 오류가 해제되지는 않습니다.")
         if project.narrative.get("research_followup_needed"):
-            st.warning("재무 분석은 저장됐지만 기사 조사를 완료하지 못했습니다. 현재 전달파일에 현안 누락이 표시됩니다.")
+            st.warning("재무 분석은 저장됐지만 공개 현안이 아직 없습니다. 필요한 경우 대시보드에서 뉴스를 업데이트하세요. 현재 전달파일에는 현안 누락이 표시됩니다.")
         render_downloads(project, news_only)
         if project.facts and not news_only:
             assessment(project)
@@ -205,6 +200,7 @@ def render(store, owner, secret, panels):
                     st.write(warning)
                 for issue in issues:
                     st.write(f"FY{issue.fiscal_year}: {issue.message}")
+        st.button("새 자료로 다시 분석", on_click=next_step, args=(project, 0))
         advanced = st.toggle("검토·수정·추가 기능 (선택)", value=False, key=f"advanced_{project.project_id}")
         render_research(project, persist, secret, allow_run=False, detailed=advanced)
         if advanced:
@@ -221,7 +217,6 @@ def render(store, owner, secret, panels):
                     st.rerun()
             with st.expander("담당자·의견을 별도로 기록하려면"):
                 render_evidence_review(project, persist, include_fact_review=not news_only)
-            st.button("자료 추가·다시 분석", on_click=next_step, args=(project, 0))
             if not news_only:
                 panels["review"](project)
                 panels["validation"](project)
@@ -251,28 +246,28 @@ def render(store, owner, secret, panels):
         return
 
     st.subheader("공개자료를 준비해 주세요")
-    reprocess = (st.checkbox("보고서 추가·재분석", value=False) if project.facts else True) if not news_only else False
     if project.facts and not news_only:
         st.success(f"재무수치 {len(project.facts)}건이 저장돼 있습니다. 같은 보고서를 다시 올릴 필요가 없습니다.")
-    if reprocess:
+    if not news_only:
         if project.sources and not project.facts:
             st.warning("재무수치 추출 0건: 원문만 저장된 상태입니다. 아직 재무비율·보고서를 만들 수 없습니다. 같은 파일을 다시 선택해 분석하거나 재무제표가 포함된 다른 파일을 올려 주세요.")
-        st.info("공개된 연차보고서·재무제표를 올려 주세요. 보고서가 없거나 비공개 자료만 있다면 위에서 ‘공개 현안만’ 경로를 선택하세요.")
-        public_file = st.checkbox("공개된 재무보고서입니다. 비공개·거래처 제공 자료는 업로드하지 않습니다.")
-        upload = st.file_uploader("공개 재무보고서 파일", type=["pdf", "xlsx", "csv"], disabled=not public_file)
-        with st.expander("재분석 옵션 · 필요한 경우에만"):
-            replace_confirmed = st.checkbox("같은 파일 재분석 시 기존 추출값·수정값을 이력에 보존하고 새 결과로 교체합니다.") if project.facts else False
-            force_refresh = st.checkbox("저장 결과 대신 AI 새 추출 요청 (추가 비용·새 승인 필요)", value=False)
+        st.caption("공개된 연차보고서·재무제표를 올려 주세요. 비공개 자료만 있다면 ‘공개 현안만’ 경로를 선택하세요.")
+        upload = st.file_uploader("공개 재무보고서 파일", type=["pdf", "xlsx", "csv"])
+        run_upload = st.button("이 자료로 분석하기", disabled=upload is None, type="primary")
+        replace_confirmed = force_refresh = False
+        if project.sources or project.facts:
+            with st.expander("재분석 옵션 · 필요한 경우에만"):
+                if project.facts:
+                    replace_confirmed = st.checkbox("같은 파일 재분석 시 기존 추출값·수정값을 이력에 보존하고 새 결과로 교체합니다.")
+                force_refresh = st.checkbox("저장 결과 대신 AI 새 추출 요청 (추가 비용·새 승인 필요)", value=False)
         if has_saved_news(project):
             st.info("이미 수집한 기업 뉴스와 출처를 재사용합니다. 재무분석 후 같은 뉴스를 다시 검색하지 않습니다.")
             st.caption("뉴스 수집일과 미검토 상태는 전달자료에 유지됩니다. 최신 뉴스가 필요하면 기업 뉴스에서 업데이트하세요.")
         else:
-            st.caption("재무 추출 후 필요한 경우 공개 기사 조사를 이어갑니다. 각 유료 요청은 실행 전에 확인합니다.")
-        permitted = public_file
-        run_upload = st.button("이 자료로 분석하기", disabled=upload is None or not permitted, type="primary")
+            st.caption("재무 분석만 실행합니다. 공개 현안은 대시보드의 저장 뉴스를 재사용하거나 필요한 경우 별도로 업데이트하세요.")
         if run_upload or approved_action == "upload":
             try:
-                if upload is None or not permitted:
+                if upload is None:
                     raise ValueError("공개 보고서 파일을 선택한 뒤 다시 분석해 주세요.")
                 from .ingest import parse_uploaded_file
                 from .ai import extract_facts_from_text
@@ -315,18 +310,11 @@ def render(store, owner, secret, panels):
                         warnings.append("재무수치 0건입니다. 손익계산서·재무상태표·현금흐름표가 포함된 문서인지 확인하십시오. 요약 프레젠테이션만으로는 평가가 어려울 수 있습니다.")
                     persist()
                 if facts:
-                    if has_saved_news(project):
+                    if has_saved_news(project) or project.narrative.get("research_briefs"):
                         project.narrative.pop("research_followup_needed", None)
-                        persist()
-                    elif secret("OPENAI_API_KEY"):
-                        try:
-                            with st.spinner("재무 분석을 저장했습니다. 공개 현안 조사를 준비합니다..."):
-                                research_company_openai(project, secret("OPENAI_API_KEY"), secret("OPENAI_MODEL", DEFAULT_OPENAI_MODEL), action="research")
-                                project.narrative.pop("research_followup_needed", None)
-                                persist()
-                        except Exception:
-                            project.narrative["research_followup_needed"] = True
-                            persist()
+                    else:
+                        project.narrative["research_followup_needed"] = True
+                    persist()
                     st.session_state[f"next_step_{project.project_id}"] = 1
                 st.rerun()
             except Exception as exc:
@@ -338,7 +326,7 @@ def render(store, owner, secret, panels):
     with st.expander("공개 기사·사업정보 조사" + ("" if news_only else " · 선택"), expanded=news_only):
         render_research(project, persist, secret, allow_run=True, approved=approved_action == "research")
     if has_results:
-        st.button("다음 · 결과 확인", type="primary", on_click=next_step, args=(project, 1))
+        st.button("결과·전달자료 보기", type="primary", on_click=next_step, args=(project, 1))
 
 
 def render_research(project, persist, secret, *, allow_run, approved=False, detailed=False):

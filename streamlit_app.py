@@ -555,18 +555,16 @@ def main():
                         format_func=lambda value: "대시보드" if value == "기업 뉴스" else value,
                         label_visibility="collapsed")
         st.divider()
-        with st.expander("공개자료 이용 안내", expanded=not st.session_state.get("public_workspace_ack")):
-            st.caption("뉴스는 바로 열람할 수 있습니다. 기업 추가와 분석에는 공개자료만 사용하세요. 비공개 재무제표와 내부 의견은 사내 Claude에서 처리합니다.")
-            can_input = st.checkbox("공개 가능한 정보만 입력하겠습니다.", key="public_workspace_ack")
         st.caption("저장 뉴스 열람은 추가 AI 호출 없음")
     if view in ("기업 뉴스", "관심 기업 관리"):
         render_market(get_store(), secret("APP_USER_ID", "local-user"), secret,
-                      management=view == "관심 기업 관리", can_input=can_input)
+                      management=view == "관심 기업 관리", can_input=True)
     else:
         st.title("재무 상세분석")
-        st.caption("선택한 기업의 재무자료와 저장 뉴스를 함께 검토합니다.")
-        if not can_input:
-            st.info("왼쪽 메뉴의 공개자료 이용 안내를 확인한 뒤 분석을 시작해 주세요.")
+        st.caption("회사 선택 → 공개 재무자료 분석 → 결과와 사내 전달자료 받기")
+        if not st.session_state.get("public_workspace_ack"):
+            st.caption("공개자료 이용 안내: 업로드는 외부 전송입니다. 공개된 재무자료만 사용하고, 비공개 재무제표와 내부 의견은 사내 Claude에서 처리하세요.")
+        if not st.checkbox("공개 가능한 재무자료만 사용합니다", key="public_workspace_ack"):
             st.stop()
         render(get_store(), secret("APP_USER_ID", "local-user"), secret, {
             "input": source_input_panel, "review": review_panel, "validation": validation_analysis_panel,

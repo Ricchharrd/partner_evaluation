@@ -51,11 +51,12 @@ def portfolio(store, owner):
 
 
 def assessment(project):
+    from .periods import period_label
     st.subheader("공개 재무비율")
     if not is_current(project):
         st.info("자료 입력·검토에서 최신 입력으로 검증 및 계산을 실행하십시오.")
         return
-    st.dataframe([{"연도": row.fiscal_year, "지표": row.label, "값": row.value,
+    st.dataframe([{"기간": period_label(project.facts, row.fiscal_year), "지표": row.label, "값": row.value,
                    "산식": row.formula, "상태": row.status} for row in project.ratios],
                  hide_index=True, width="stretch")
     st.caption("공개 비율과 검증 상태만 표시합니다. 재무 등급·가중치·감점은 사내 스킬에서만 계산합니다.")

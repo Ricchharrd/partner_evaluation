@@ -17,7 +17,7 @@ from .hitl import (authorize_request, render_hitl, render_evidence_review, curre
                    clear_action_tickets, quick_review_blocker, record_quick_review)
 
 
-FINANCE_UI_VERSION = 3
+FINANCE_UI_VERSION = 4
 STEPS = ["1. 자료 준비", "2. 결과 확인"]
 
 
@@ -185,14 +185,17 @@ def render(store, owner, secret, panels):
             st.info("확인할 결과가 아직 없습니다. 자료 준비 단계에서 분석을 시작해 주세요.")
             st.button("자료 준비로 이동", on_click=next_step, args=(project, 0))
             return
-        issues = [v for v in project.validations if v.severity in {"오류", "경고"}] if not news_only else []
+        issues = [v for v in project.validations if v.severity in {"오류", "경고"} or v.code == "INTERIM_PERIOD"] if not news_only else []
         errors = sum(v.severity == "오류" for v in issues)
         if errors:
             st.error(f"수치 오류 {errors}건을 먼저 확인해 주세요. 검토 승인만으로 오류가 해제되지는 않습니다.")
+        if any(v.code == "INTERIM_PERIOD" for v in issues):
+            st.info("중간 재무제표 수치는 보존했습니다. 연간 재무비율과 전년 연간실적 비교는 계산하지 않았습니다.")
         if project.narrative.get("research_followup_needed"):
             st.warning("재무 분석은 저장됐지만 공개 현안이 아직 없습니다. 필요한 경우 대시보드에서 뉴스를 업데이트하세요. 현재 전달파일에는 현안 누락이 표시됩니다.")
         render_downloads(project, news_only)
         if project.facts and not news_only:
+            st.caption("표시된 재무값은 업로드한 재무제표의 보고 법인 기준입니다. 사업부 실적과 모회사 연결재무는 분리해 확인하세요.")
             assessment(project)
         warnings = project.narrative.get("collection_warnings", []) if not news_only else []
         if issues or warnings:

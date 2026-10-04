@@ -25,7 +25,7 @@ from partner_finance.storage import ProjectStore
 from partner_finance.validation import validate_facts, validation_rows
 from importlib import reload
 from partner_finance import workflow as _workflow
-if getattr(_workflow, "WORKFLOW_VERSION", 0) < 2:
+if getattr(_workflow, "WORKFLOW_VERSION", 0) < 3:
     reload(_workflow)
 from partner_finance.workflow import recalculate, invalidate, is_current, finalize, log_action, filter_interim_comparatives
 from partner_finance.dashboard import portfolio, assessment, business_panel, updates_panel, effort_panel
@@ -568,7 +568,7 @@ def main():
         from importlib import reload
         from partner_finance import simple_ui
         # Cloud may rerun the entry point while retaining the previous imported UI module.
-        if getattr(simple_ui, "FINANCE_UI_VERSION", 0) < 3:
+        if getattr(simple_ui, "FINANCE_UI_VERSION", 0) < 4:
             reload(simple_ui)
         st.title("재무 상세분석")
         st.caption("회사 선택 → 공개 재무자료 분석 → 결과와 사내 전달자료 받기")

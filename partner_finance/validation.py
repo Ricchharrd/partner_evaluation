@@ -5,6 +5,7 @@ from collections import defaultdict
 from .analysis import effective_fact_map
 from .schema import FinancialFact, ValidationIssue
 from .account_guards import mapping_problem, normalize_scope
+from .periods import is_annual_flow
 
 
 REQUIRED_ITEMS = ["revenue", "operating_income", "net_income", "total_assets", "total_liabilities", "total_equity"]
@@ -80,10 +81,10 @@ def validate_facts(facts: list[FinancialFact]) -> list[ValidationIssue]:
         ordered = []
         for year in years:
             fact = selected.get((year, key))
-            if fact and fact.effective_value is not None:
+            if fact and fact.effective_value is not None and is_annual_flow(fact):
                 ordered.append((year, fact.effective_value))
         for (prior_year, prior), (year, current) in zip(ordered, ordered[1:]):
-            if prior != 0 and abs((current - prior) / abs(prior)) >= 0.75:
+            if year == prior_year + 1 and prior != 0 and abs((current - prior) / abs(prior)) >= 0.75:
                 issues.append(ValidationIssue("LARGE_YOY_CHANGE", "경고", year, f"{key}가 FY{prior_year} 대비 75% 이상 변동했습니다.", [key]))
 
     if not facts:

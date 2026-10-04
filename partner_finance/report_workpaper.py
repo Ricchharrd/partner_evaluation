@@ -1,6 +1,8 @@
 """Deterministic report workpaper shared by the web app and offline Claude skill."""
 from collections import defaultdict
+from types import SimpleNamespace
 from .schema import STANDARD_ITEMS
+from .periods import period_label
 
 REPORT_VERSION = "construction-partner-report/1.0"
 ITEMS = ("revenue", "operating_income", "net_income", "total_assets", "total_liabilities",
@@ -58,12 +60,14 @@ def build_report_workpaper(evidence):
         lines += ["공개 재무자료 없음. 비공개 재무제표는 사내 Claude에서만 추출·검증·계산합니다. 자료가 없으면 재무 결론은 보류합니다."]
     else:
         lines += ["이미 계산된 값을 재사용합니다. 단위배수를 다시 곱하거나 전체 PDF·전체 계산을 반복하지 않습니다.",
-                  "금액은 원통화 기본단위이며 잠정치입니다. 누락은 0이 아닙니다."]
+                  "금액은 원통화 기본단위이며 잠정치입니다. 누락은 0이 아닙니다.",
+                  "재무값은 원문 보고 법인의 연결·별도 범위 기준입니다. 사업부 실적과 모회사 연결 재무상태·현금흐름을 사업부 단일 재무제표로 합치지 않습니다."]
+        dated_facts = [SimpleNamespace(**fact) for fact in facts]
         for year in years:
             contexts = sorted({(cell(f.get("period_start")), cell(f.get("period_end")),
                                 cell(f.get("reporting_scope")), cell(f.get("currency")))
                                for f in facts if f["fiscal_year"] == year})
-            lines.append(f"FY{year} 기간·범위·통화: " + "; ".join(" / ".join(c) for c in contexts))
+            lines.append(f"{period_label(dated_facts, year)} 기간·범위·통화: " + "; ".join(" / ".join(c) for c in contexts))
         lines += [
                   "| 연도 | 항목 | 값 | 근거 |", "|---|---|---|---|"]
         groups = defaultdict(list)
@@ -83,14 +87,14 @@ def build_report_workpaper(evidence):
                 locator = cell(f.get("source_locator"))
                 if len(locator) > 180:
                     locator = locator[:180] + "… (전체 위치는 근거 JSON)"
-                lines.append(f"| {year} | {STANDARD_ITEMS[item]} | {display} | {cell(f.get('fact_id'))}: {locator} |")
+                lines.append(f"| {period_label(dated_facts, year)} | {STANDARD_ITEMS[item]} | {display} | {cell(f.get('fact_id'))}: {locator} |")
         lines.append("### 계산된 공개 재무비율")
         for ratio in evidence.get("ratios", []):
             year = ratio.get("fiscal_year")
             if year in years and ratio.get("metric_key") in RATIOS:
                 blocked = any(v.get("fiscal_year") in (None, year) for v in context["errors"])
                 value = "검증 오류로 보류" if blocked else cell(ratio.get("value"))
-                lines.append(f"- FY{year} {cell(ratio.get('label'))}: {value}; {cell(ratio.get('status'))}; 산식 {cell(ratio.get('formula'))}")
+                lines.append(f"- {period_label(dated_facts, year)} {cell(ratio.get('label'))}: {value}; {cell(ratio.get('status'))}; 산식 {cell(ratio.get('formula'))}")
         lines.append("비율은 원본 소수 단위(1.0=100%), 이자보상배율은 배수입니다. 산식을 확인한 뒤 표시 단위를 바꾸십시오.")
         lines.append("재무 등급과 점수는 이 자료에 포함되지 않습니다. 사내 스킬에서만 평가합니다.")
     lines += ["### 반드시 유지할 한계", "환율은 제공된 대용치이며 완전한 K-IFRS 환산이 아닙니다. 내부 등급 기준과 보정은 이 공개 작업본에 포함되지 않습니다."]

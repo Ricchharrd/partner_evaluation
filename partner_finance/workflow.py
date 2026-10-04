@@ -11,7 +11,7 @@ from .validation import validate_facts
 from .legacy_sec.sec_fx import HARDCODED_USD_KRW_RATES
 from .account_guards import normalize_scope
 
-WORKFLOW_VERSION = 2
+WORKFLOW_VERSION = 3
 
 
 def filter_interim_comparatives(existing, incoming):
@@ -68,7 +68,13 @@ def recalculate(project):
         fact.reporting_scope = normalize_scope(fact.reporting_scope)
     project.validations = validate_facts(project.facts)
     for year, reason in context_blocks(project.facts).items():
-        project.validations.append(ValidationIssue("CONTEXT_BLOCK", "오류", year, reason))
+        reasons = set(reason.split(", "))
+        if reasons == {"연간 회계기간 아님"}:
+            project.validations.append(ValidationIssue(
+                "INTERIM_PERIOD", "정보", year,
+                "중간 재무제표입니다. 수치는 보존하되 연간 재무비율 계산과 연간 실적 비교는 보류합니다."))
+        else:
+            project.validations.append(ValidationIssue("CONTEXT_BLOCK", "오류", year, reason))
     project.ratios = calculate_ratios(project.facts)
     project.narrative["basic"] = build_basic_narrative(project.facts, project.ratios)
     fx_rows = []

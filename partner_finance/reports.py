@@ -6,6 +6,7 @@ from typing import Iterable
 from .analysis import effective_fact_map, ratio_rows
 from .schema import AnalysisProject, STANDARD_ITEMS, facts_to_rows
 from .validation import validation_rows
+from .periods import period_label
 
 
 def _literal(value):
@@ -143,6 +144,7 @@ def build_word(project: AnalysisProject) -> bytes:
     reviewer = project.narrative.get('review', {}).get('reviewer', '미검토') if current_review(project) else '미검토'
     document.add_paragraph(f"검토 상태: {status} | 검토자: {reviewer}")
     document.add_paragraph("이 웹 보고서는 공개 재무값과 비율만 정리합니다. 등급, 가중치, 감점과 최종 판단은 사내 Claude Enterprise 스킬에서 처리합니다.")
+    document.add_paragraph("재무값은 업로드된 재무제표의 보고 법인과 연결·별도 범위 기준입니다. 사업부 실적이 별도로 제시되더라도 이를 사업부의 독립 재무상태나 현금흐름으로 해석하지 않습니다.")
 
     narrative = project.narrative.get("final") or project.narrative.get("basic") or {}
     document.add_heading("1. 기업개요", level=1)
@@ -163,7 +165,7 @@ def build_word(project: AnalysisProject) -> bytes:
     table.style = "Table Grid"
     _set_cell_text(table.rows[0].cells[0], "항목")
     for index, year in enumerate(years, start=1):
-        _set_cell_text(table.rows[0].cells[index], f"FY{year}")
+        _set_cell_text(table.rows[0].cells[index], period_label(project.facts, year))
     for item in summary_items:
         cells = table.add_row().cells
         _set_cell_text(cells[0], STANDARD_ITEMS.get(item, item))
@@ -174,6 +176,8 @@ def build_word(project: AnalysisProject) -> bytes:
             _set_cell_text(cells[index], "검증 오류·확인 필요" if blocked else f"{value:,.0f} {fact.currency}" if value is not None and fact else "미확인")
 
     document.add_heading("3. 재무비율 및 변동 분석", level=1)
+    if any(issue.code == "INTERIM_PERIOD" for issue in project.validations):
+        document.add_paragraph("중간기간 수치는 원문 확인용으로 표시하며, 연간 비율과 전년 연간실적 비교에 사용하지 않았습니다.")
     latest_ratios = [row for row in project.ratios if row.fiscal_year in years]
     ratio_table = document.add_table(rows=1, cols=5)
     ratio_table.style = "Table Grid"
@@ -182,7 +186,7 @@ def build_word(project: AnalysisProject) -> bytes:
     for ratio in latest_ratios:
         cells = ratio_table.add_row().cells
         value = "미확인" if ratio.value is None else f"{ratio.value:,.4f}"
-        for cell, content in zip(cells, [ratio.fiscal_year, ratio.label, value, ratio.formula, ratio.status]):
+        for cell, content in zip(cells, [period_label(project.facts, ratio.fiscal_year), ratio.label, value, ratio.formula, ratio.status]):
             _set_cell_text(cell, content)
     document.add_heading("관찰된 사실", level=2)
     _add_bullets(document, narrative.get("observed_facts"))

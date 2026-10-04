@@ -1,13 +1,19 @@
 """Local, bounded selection of statement blocks; never calls an AI service."""
 import re
 
-SELECTION_VERSION = "statements-2"
+SELECTION_VERSION = "statements-3"
 DEFAULT_BUDGET = 36_000
 TERMS = ("balance sheet", "financial position", "income statement", "profit or loss",
          "cash flow", "changes in equity", "interest expense", "finance costs",
          "재무상태표", "손익계산서", "현금흐름표", "balance de situación",
          "cuenta de pérdidas", "flujos de efectivo")
-PRIMARY = re.compile(r"consolidated (?:statement(?:s)? of (?:financial position|profit or loss|cash flows?)|balance sheet|income statement)|연결\s*(?:재무상태표|손익계산서|현금흐름표)", re.I)
+PRIMARY = re.compile(r"consolidated (?:statement(?:s)? of (?:financial position|profit or loss|cash flows?)|balance sheet|income statement)|연결(?:재무상태표|(?:포괄)?손익계산서|현금흐름표)", re.I)
+
+
+def _header(page):
+    # Korean statement titles in DART PDFs often have spaces between every syllable.
+    compact = re.sub(r"(?<=[가-힣])\s+(?=[가-힣])", "", page)
+    return " ".join(compact.lower().split())[:650]
 
 
 def select_financial_text(text, budget=DEFAULT_BUDGET):
@@ -19,7 +25,7 @@ def select_financial_text(text, budget=DEFAULT_BUDGET):
     scores, primary = [], []
     for i, page in enumerate(pages):
         lower = " ".join(page.lower().split())
-        header = lower[:650]
+        header = _header(page)
         hits = sum(term in lower for term in TERMS)
         numbers = len(re.findall(r"\d[\d,.]*", page))
         adjusted = bool(re.search(r"(?:adjusted|reclassified)\s+(?:consolidated\s+)?(?:statement|income|balance|cash)", header)) or "alternative performance" in header
@@ -30,7 +36,7 @@ def select_financial_text(text, budget=DEFAULT_BUDGET):
     ranked = sorted(range(len(pages)), key=lambda i: (-scores[i], i))
     # Statement continuations precede unrelated notes and management APM tables.
     def family(i):
-        header = " ".join(pages[i].lower().split())[:650]
+        header = _header(pages[i])
         return {kind for kind, terms in {
             "balance": ("financial position", "balance sheet", "재무상태표"),
             "income": ("profit or loss", "income statement", "손익계산서"),

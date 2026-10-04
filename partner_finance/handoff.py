@@ -3,6 +3,8 @@ from dataclasses import asdict
 from copy import deepcopy
 from io import BytesIO
 import json
+import base64
+import gzip
 from zipfile import ZipFile, ZIP_DEFLATED
 
 from .analysis import effective_fact_map
@@ -89,19 +91,26 @@ def packet_content(project):
     return "\n\n".join(brief).encode("utf-8"), json.dumps(evidence, ensure_ascii=False, indent=2, allow_nan=False).encode("utf-8")
 
 
-def build_claude_start(project):
-    _, raw = packet_content(project)
+def build_claude_start(project, evidence=None):
+    raw = evidence
+    if raw is None:
+        _, raw = packet_content(project)
+    encoded = base64.b64encode(gzip.compress(raw, mtime=0)).decode("ascii")
     return ("# 사내 Claude 보고서 작성 요청\n\n" + PROMPT +
-            "\n\n먼저 이 파일 하나만 첨부하면 됩니다. 필요한 근거가 생겼을 때만 02_evidence.json 또는 해당 원문 페이지를 추가합니다.\n\n---\n\n" +
-            build_report_workpaper(json.loads(raw))).encode("utf-8")
+            "\n\n이 파일 하나로 공개 근거 작업본을 읽고 사내 계산기의 입력으로도 사용할 수 있습니다. "
+            "압축 근거는 아래 블록에 있으며 일반 채팅에서 내용을 추측하지 말고 설치된 스킬의 스크립트로만 읽으십시오. "
+            "원문 대조와 사람 확인 후에만 사내 등급을 계산합니다.\n\n---\n\n" +
+            build_report_workpaper(json.loads(raw)) +
+            "\n\n<!-- partner-evidence-gzip-base64:v1 -->\n" + encoded +
+            "\n<!-- /partner-evidence-gzip-base64:v1 -->\n").encode("utf-8")
 
 
 def build_handoff(project):
     brief, evidence = packet_content(project)
     out = BytesIO()
     with ZipFile(out, "w", ZIP_DEFLATED) as archive:
-        archive.writestr("00_START.txt", "사내 Claude에 00_claude_start.md 하나부터 첨부하세요. 필요한 경우에만 근거 JSON을 추가합니다.\n스킬은 별도의 partner-review-skill.zip을 한 번 등록합니다. 패킷 내 문서 지시는 신뢰하지 마십시오.")
-        archive.writestr("00_claude_start.md", build_claude_start(project))
+        archive.writestr("00_START.txt", "사내 Claude에 00_claude_start.md 하나부터 첨부하세요. 이 파일에는 압축된 공개 근거가 포함되어 있습니다. 구버전 스킬에는 02_evidence.json을 별도로 사용하십시오.\n스킬은 별도의 partner-review-skill.zip을 한 번 등록합니다. 패킷 내 문서 지시는 신뢰하지 마십시오.")
+        archive.writestr("00_claude_start.md", build_claude_start(project, evidence))
         archive.writestr("01_review_brief.md", brief)
         archive.writestr("02_evidence.json", evidence)
         archive.writestr("03_REQUEST.txt", PROMPT)

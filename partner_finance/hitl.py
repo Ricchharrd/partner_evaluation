@@ -5,6 +5,9 @@ import re
 import time
 from .schema import utc_now
 
+MAX_INPUT_BYTES = 1_000_000
+MAX_OUTPUT_TOKENS = 16_000
+
 
 def fingerprint(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
@@ -45,7 +48,7 @@ def preflight(body):
             "output_limit": output, "estimated_text_usd": cost, "web_tools": tools,
             "input_bytes": tokens, "high_volume": tokens > 20000 or (tools and not bounded_search),
             "bounded_search": bounded_search,
-            "over_limit": tokens > 240_000 or output > 5000,
+            "over_limit": tokens > MAX_INPUT_BYTES or output > MAX_OUTPUT_TOKENS,
             "blocked": blocked, "sensitive": sensitive}
 
 
@@ -60,7 +63,7 @@ def authorize_request(project, body, *, action=None):
     key = project.project_id + ":" + info["hash"]
     tickets = st.session_state.setdefault("hitl_tickets", {})
     if info["over_limit"]:
-        raise ValueError("처리 한도 초과: 입력을 240,000바이트 이하·출력을 5,000토큰 이하로 줄인 뒤 다시 준비하십시오. 자동 분할 호출하지 않습니다.")
+        raise ValueError(f"전체 문서 처리 한도 초과: 요청 입력 {MAX_INPUT_BYTES:,}바이트, 출력 {MAX_OUTPUT_TOKENS:,}토큰 한도입니다. 일부 페이지를 몰래 제외하거나 자동 분할 호출하지 않습니다.")
     if info["blocked"]:
         raise ValueError("보안 차단: 인증정보 의심 문자열이 있습니다. 원문에서 제거한 뒤 다시 검사하십시오. 승인으로 우회할 수 없습니다.")
     if info["sensitive"]:

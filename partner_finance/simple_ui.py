@@ -17,7 +17,7 @@ from .hitl import (authorize_request, render_hitl, render_evidence_review, curre
                    clear_action_tickets, quick_review_blocker, record_quick_review)
 
 
-FINANCE_UI_VERSION = 4
+FINANCE_UI_VERSION = 5
 STEPS = ["1. 자료 준비", "2. 결과 확인"]
 
 
@@ -176,10 +176,10 @@ def render(store, owner, secret, panels):
             stage = st.radio("진행 단계", STEPS, key=step_key, horizontal=True)
     else:
         stage = STEPS[0]
-    approved_action = render_hitl(project, persist, include_fact_review=not news_only, show_review=False,
-                                 allowed_actions=(["research"] + ([] if news_only else ["upload"])) if stage == STEPS[0] else [])
+    approved_action = None
 
     if stage == STEPS[1]:
+        render_hitl(project, persist, show_review=False, allowed_actions=[])
         st.subheader("분석 결과와 사내 전달자료")
         if not has_results:
             st.info("확인할 결과가 아직 없습니다. 자료 준비 단계에서 분석을 시작해 주세요.")
@@ -256,8 +256,9 @@ def render(store, owner, secret, panels):
         if project.sources and not project.facts:
             st.warning("재무수치 추출 0건: 원문만 저장된 상태입니다. 아직 재무비율·보고서를 만들 수 없습니다. 같은 파일을 다시 선택해 분석하거나 재무제표가 포함된 다른 파일을 올려 주세요.")
         st.caption("공개된 연차보고서·재무제표를 올려 주세요. 비공개 자료만 있다면 ‘공개 현안만’ 경로를 선택하세요.")
-        upload = st.file_uploader("공개 재무보고서 파일", type=["pdf", "xlsx", "csv"])
-        run_upload = st.button("이 자료로 분석하기", disabled=upload is None, type="primary")
+        st.caption("전체 문서 분석 모드: 추출된 모든 페이지를 AI에 전달합니다. 일부 페이지 분석보다 비용과 처리시간이 늘어날 수 있습니다.")
+        upload = st.file_uploader("공개 재무보고서 파일", type=["pdf", "xlsx", "csv"],
+                                  key=f"finance_upload_{project.project_id}")
         replace_confirmed = force_refresh = False
         if project.sources or project.facts:
             with st.expander("재분석 옵션 · 필요한 경우에만"):
@@ -269,6 +270,13 @@ def render(store, owner, secret, panels):
             st.caption("뉴스 수집일과 미검토 상태는 전달자료에 유지됩니다. 최신 뉴스가 필요하면 기업 뉴스에서 업데이트하세요.")
         else:
             st.caption("재무 분석만 실행합니다. 공개 현안은 대시보드의 저장 뉴스를 재사용하거나 필요한 경우 별도로 업데이트하세요.")
+        pending = st.session_state.get("hitl_pending")
+        awaiting_approval = bool(pending and pending["project_id"] == project.project_id)
+        approved_action = render_hitl(project, persist, show_review=False, allowed_actions=["upload", "research"])
+        # Keep just one next action in the upload area while consent is pending.
+        run_upload = False
+        if not awaiting_approval:
+            run_upload = st.button("이 자료로 분석하기", disabled=upload is None, type="primary")
         if run_upload or approved_action == "upload":
             try:
                 if upload is None:
@@ -330,6 +338,8 @@ def render(store, owner, secret, panels):
                 clear_action_tickets(project)
         for warning in project.narrative.get("collection_warnings", []):
             st.warning(warning)
+    else:
+        approved_action = render_hitl(project, persist, show_review=False, allowed_actions=["research"])
     with st.expander("공개 기사·사업정보 조사" + ("" if news_only else " · 선택"), expanded=news_only):
         render_research(project, persist, secret, allow_run=True, approved=approved_action == "research")
     if has_results:

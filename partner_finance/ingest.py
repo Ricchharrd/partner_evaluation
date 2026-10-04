@@ -168,17 +168,17 @@ def parse_xlsx(content: bytes, entity_id: str, source: SourceDocument) -> tuple[
     return facts, warnings if warnings or facts else ["처리 가능한 재무표를 찾지 못했습니다."]
 
 
-def extract_pdf_text(content: bytes, max_pages: int = 1000) -> tuple[str, list[str]]:
+def extract_pdf_text(content: bytes, max_pages: int | None = None) -> tuple[str, list[str]]:
     from pypdf import PdfReader
 
     reader = PdfReader(BytesIO(content))
     page_count = len(reader.pages)
+    if max_pages is not None and page_count > max_pages:
+        raise ValueError("PDF가 지정한 페이지 한도를 넘었습니다. 앞부분만 추출하지 않습니다.")
     pages = [(page.extract_text() or "").strip() for page in reader.pages[:max_pages]]
     text = "\n\n".join(f"[PAGE {index}]\n{page}" for index, page in enumerate(pages, start=1) if page)
     average_chars = sum(len(page) for page in pages) / max(len(pages), 1)
     warnings = []
-    if page_count > max_pages:
-        warnings.append(f"전체 {page_count}쪽 중 앞 {max_pages}쪽만 텍스트 추출했습니다. 필요한 주석은 별도 파일로 처리하십시오.")
     if average_chars < 80:
         warnings.append("스캔 PDF로 추정됩니다. 이 환경에는 OCR/비전 추출이 연결되어 있지 않아 수동 입력이 필요합니다.")
     else:

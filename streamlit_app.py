@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import hmac
+from importlib import reload
 from pathlib import Path
 import sys
 
@@ -12,8 +13,10 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from partner_finance.runtime import refresh_finance_modules
-refresh_finance_modules("finance-no-budget-caps-20261005-3")
+from partner_finance import runtime as _runtime
+if getattr(_runtime, "RUNTIME_VERSION", 0) < 2:
+    reload(_runtime)
+_runtime.refresh_finance_modules(_runtime.module_release())
 
 from partner_finance.ai import extract_facts_from_text, generate_project_narrative
 from partner_finance.openai_provider import OpenAIProvider, DEFAULT_OPENAI_MODEL
@@ -26,7 +29,6 @@ from partner_finance.schema import AnalysisProject, EntityProfile, FinancialFact
 from partner_finance.sec_adapter import candidate_rows, collect_sec_project
 from partner_finance.storage import ProjectStore
 from partner_finance.validation import validate_facts, validation_rows
-from importlib import reload
 from partner_finance import workflow as _workflow
 if getattr(_workflow, "WORKFLOW_VERSION", 0) < 3:
     reload(_workflow)

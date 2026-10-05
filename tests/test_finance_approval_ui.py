@@ -22,6 +22,36 @@ def finance_app():
 
 
 class FinanceApprovalUITests(unittest.TestCase):
+    def test_financial_download_exposes_public_evidence_to_private_skill(self):
+        from partner_finance.schema import AnalysisProject, EntityProfile, FinancialFact, SourceDocument
+        from partner_finance.simple_ui import render_downloads
+        from partner_finance.workflow import recalculate
+
+        entity = EntityProfile("Synthetic Builder")
+        project = AnalysisProject("Synthetic review", entity)
+        source = SourceDocument("annual.pdf", "공개 링크", url="https://example.com/annual.pdf")
+        project.sources.append(source)
+        project.facts.append(FinancialFact(
+            entity.entity_id, 2025, "revenue", "Revenue", 100, 100_000_000, "EUR",
+            unit_multiplier=1_000_000, period_start="2025-01-01", period_end="2025-12-31",
+            source_id=source.source_id, source_locator="PAGE 12",
+        ))
+        recalculate(project)
+        first, second = MagicMock(), MagicMock()
+        with patch("partner_finance.simple_ui.st") as streamlit, \
+                patch("partner_finance.simple_ui.has_saved_news", return_value=False), \
+                patch("partner_finance.simple_ui.build_claude_start", return_value=b"start"), \
+                patch("partner_finance.simple_ui.build_word", return_value=b"word"), \
+                patch("partner_finance.simple_ui.build_handoff", return_value=b"zip"):
+            streamlit.columns.return_value = (first, second)
+            render_downloads(project, news_only=False)
+        raw = next(call for call in first.download_button.call_args_list
+                   if call.args[0] == "사내 스킬용 공개 원자료")
+        self.assertEqual(raw.args[2], "02_evidence.json")
+        packet = json.loads(raw.args[1])
+        self.assertEqual(packet["facts"][0]["source_locator"], "PAGE 12")
+        self.assertNotIn("policy_evaluation", packet)
+
     def test_company_input_precedes_compact_saved_selection_and_reuses_company(self):
         from partner_finance.storage import ProjectStore
         from partner_finance.schema import AnalysisProject, EntityProfile

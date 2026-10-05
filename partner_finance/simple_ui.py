@@ -62,7 +62,7 @@ def render_downloads(project, news_only):
                                     width="stretch", on_click="ignore")
         st.caption("원자료에는 추출값·기간·출처·검증 경고가 들어 있고 사내 등급 기준은 없습니다. Word는 기존 양식에 옮기는 공개자료 초안입니다.")
     with st.expander("추가 파일 · 사용 방법 · 스킬 설치"):
-        st.write("받은 00_claude_start.md 하나를 사내 Claude에 첨부하면 됩니다. 스킬이 보고서 초안을 작성하고 중요한 예외만 질문합니다.")
+        st.write("재무자료가 있으면 02_evidence.json을 사내 스킬에 전달하세요. 뉴스만 검토할 때는 00_claude_start.md를 사용할 수 있습니다. 같은 근거를 중복 첨부할 필요는 없습니다.")
         st.caption("비공개 재무제표는 사내 Claude에만 첨부하며, 내부 결과는 이 웹에 다시 올리지 않습니다.")
         st.caption("Excel과 아래 파일은 공개자료 예비 산출물입니다. 내부 맥락을 결합한 최종 보고서는 사내 Claude에서 작성합니다.")
         st.download_button("전체 근거 ZIP (필요할 때만)", build_handoff(project), "claude_review_packet.zip", "application/zip", on_click="ignore")

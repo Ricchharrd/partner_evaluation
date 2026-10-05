@@ -55,12 +55,14 @@ def request_texts(value, depth=0):
 
 def preflight(body):
     raw = json.dumps(body, ensure_ascii=False)
-    blocked = bool(re.search(r"sk-[A-Za-z0-9_-]{16,}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}|(?:password|비밀번호)\s*[:=]\s*[^\s]{6,}", raw, re.I))
-    sensitive = bool(re.search(r"strictly private|internal only|strictly confidential|private and confidential|대외비|사외비|비공개|주민등록|비밀번호|password\s*[:=]", raw, re.I))
+    texts = list(request_texts(body))
+    inspection = "\n".join(texts)
+    blocked = bool(re.search(r"sk-[A-Za-z0-9_-]{16,}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}|(?:password|비밀번호)\s*[:=]\s*[^\s]{6,}", inspection, re.I))
+    sensitive = bool(re.search(r"strictly private|internal only|strictly confidential|private and confidential|대외비|사외비|비공개|주민등록|비밀번호|password\s*[:=]", inspection, re.I))
     # A public annual report can discuss confidentiality without being classified.
     classification = r"(?im)^\s*(?:classification\s*[:=-]\s*)?confidential(?:\s*[-:/|].*)?\s*$|(?:this\s+(?:document|report)|document\s+classification)\s*(?:is\s+|[:=-]\s*)confidential\b|confidential\s*[-:/|]\s*(?:not for|do not|internal)|confidential\s+(?:document|report)\b"
-    sensitive = sensitive or any(re.search(classification, text) for text in request_texts(body))
-    sensitive_terms = bool(re.search(r"\bconfidential(?:ity)?\b", raw, re.I)) and not sensitive
+    sensitive = sensitive or any(re.search(classification, text) for text in texts)
+    sensitive_terms = bool(re.search(r"\bconfidential(?:ity)?\b", inspection, re.I)) and not sensitive
     # Deliberately conservative heuristic, not a tokenizer or billing upper bound.
     tokens = len(raw.encode("utf-8"))
     output = body.get("max_output_tokens", body.get("max_tokens"))

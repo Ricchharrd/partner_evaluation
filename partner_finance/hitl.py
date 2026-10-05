@@ -33,10 +33,34 @@ def current_review(project):
     return bool(record and record.get("digest") == review_digest(project))
 
 
+def request_texts(value, depth=0):
+    """Inspect actual text lines, including JSON encoded inside Responses input messages."""
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from request_texts(item, depth)
+    elif isinstance(value, list):
+        for item in value:
+            yield from request_texts(item, depth)
+    elif isinstance(value, str):
+        if depth < 3 and value.lstrip().startswith(("{", "[")):
+            try:
+                parsed = json.loads(value)
+            except ValueError:
+                pass
+            else:
+                yield from request_texts(parsed, depth + 1)
+                return
+        yield value
+
+
 def preflight(body):
     raw = json.dumps(body, ensure_ascii=False)
     blocked = bool(re.search(r"sk-[A-Za-z0-9_-]{16,}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}|(?:password|비밀번호)\s*[:=]\s*[^\s]{6,}", raw, re.I))
-    sensitive = bool(re.search(r"confidential|strictly private|internal only|대외비|사외비|비공개|주민등록|비밀번호|password\s*[:=]", raw, re.I))
+    sensitive = bool(re.search(r"strictly private|internal only|strictly confidential|private and confidential|대외비|사외비|비공개|주민등록|비밀번호|password\s*[:=]", raw, re.I))
+    # A public annual report can discuss confidentiality without being classified.
+    classification = r"(?im)^\s*(?:classification\s*[:=-]\s*)?confidential(?:\s*[-:/|].*)?\s*$|(?:this\s+(?:document|report)|document\s+classification)\s*(?:is\s+|[:=-]\s*)confidential\b|confidential\s*[-:/|]\s*(?:not for|do not|internal)|confidential\s+(?:document|report)\b"
+    sensitive = sensitive or any(re.search(classification, text) for text in request_texts(body))
+    sensitive_terms = bool(re.search(r"\bconfidential(?:ity)?\b", raw, re.I)) and not sensitive
     # Deliberately conservative heuristic, not a tokenizer or billing upper bound.
     tokens = len(raw.encode("utf-8"))
     output = body.get("max_output_tokens", body.get("max_tokens"))
@@ -51,7 +75,7 @@ def preflight(body):
             "bounded_search": bounded_search,
             "over_limit": ((MAX_INPUT_BYTES is not None and tokens > MAX_INPUT_BYTES)
                            or (MAX_OUTPUT_TOKENS is not None and output is not None and output > MAX_OUTPUT_TOKENS)),
-            "blocked": blocked, "sensitive": sensitive}
+            "blocked": blocked, "sensitive": sensitive, "sensitive_terms": sensitive_terms}
 
 
 def consume_ticket(tickets, request_hash, now=None):
@@ -97,6 +121,8 @@ def render_hitl(project, persist, *, include_fact_review=True, show_review=True,
                     else "입력이 크거나 검색 범위가 큽니다. 비용을 줄이려면 취소 후 필요한 페이지·범위만 선택하세요.")
         if finance_flow and info["output_limit"] is None:
             st.caption("보고서 전체 전송, 앱의 입력량·출력 토큰 절약 제한 해제. 모델 자체 처리량과 계정 사용 한도는 적용됩니다. 비용이 커질 수 있습니다.")
+        if info["sensitive_terms"]:
+            st.warning("본문에 기밀유지 관련 용어가 있으나 문서 기밀 표시로 확정하지 않았습니다. 원문이 실제 공개 보고서인지 확인한 뒤 승인하세요. 자동 탐지는 보안 승인을 대신하지 않습니다.")
         if info["blocked"] or info["sensitive"] or info["over_limit"]:
             st.error("보안 또는 처리 한도로 실행할 수 없습니다. 자료를 제거하거나 범위를 줄여 다시 준비하세요. 승인으로 우회할 수 없습니다.")
         with st.expander("전송 내용·모델·처리 한도 보기"):

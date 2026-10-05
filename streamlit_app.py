@@ -13,7 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from partner_finance.runtime import refresh_finance_modules
-refresh_finance_modules("finance-no-budget-caps-20261005-1")
+refresh_finance_modules("finance-no-budget-caps-20261005-2")
 
 from partner_finance.ai import extract_facts_from_text, generate_project_narrative
 from partner_finance.openai_provider import OpenAIProvider, DEFAULT_OPENAI_MODEL

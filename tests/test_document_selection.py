@@ -1,10 +1,23 @@
 import unittest
+import json
 
 from partner_finance.document_selection import select_financial_text, SELECTION_VERSION
 from partner_finance.hitl import preflight
 
 
 class DocumentSelectionTests(unittest.TestCase):
+    def test_public_confidentiality_discussion_is_not_a_document_classification(self):
+        text = ("This allows anonymous or confidential \n(at their own discretion) notifications.\n"
+                "Webuild is committed to protecting the confidentiality of corporate information.")
+        body = {"input": [{"role": "user", "content": json.dumps({"document_text": text})}]}
+        self.assertFalse(preflight(body)["sensitive"])
+        self.assertTrue(preflight(body)["sensitive_terms"])
+        for marker in ("CONFIDENTIAL", "Classification: Confidential", "This report is confidential",
+                       "Strictly confidential", "INTERNAL ONLY", "대외비"):
+            body["input"][0]["content"] = json.dumps({"document_text": marker + "\nRevenue 100"})
+            self.assertTrue(preflight(body)["sensitive"], marker)
+        self.assertTrue(preflight({"input": "sk-" + "a" * 32})["blocked"])
+
     def test_full_report_preserved_beyond_old_budget(self):
         text = "\n\n".join(f"[PAGE {i}]\n" + "Company strategy. " * 300 for i in range(1, 58))
         selected, warnings = select_financial_text(text)

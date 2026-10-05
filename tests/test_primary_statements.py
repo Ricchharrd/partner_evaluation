@@ -21,6 +21,7 @@ ASSETS
 (€’000) Note 31 December 2024
 of which: related parties 31 December 2025
 Cash and cash equivalents 18 3,214,830 2,444,680
+Trade receivables 14 4,212,938 550,747 4,254,855 582,181
 Total current assets 14,680,809 13,932,108
 Total assets 18,249,080 17,793,270
 [PAGE 282]
@@ -29,6 +30,7 @@ Consolidated statement of financial position
 EQUITY AND LIABILITIES
 (€’000) Note 31 December 2024 31 December 2025
 Profit for the year 194,477 239,847
+Retained earnings 479,364 582,129
 Total equity 20 1,949,342 1,797,381
 Total current liabilities 13,836,217 13,348,244
 Total equity and liabilities 18,249,080 17,793,270
@@ -97,8 +99,10 @@ SAMSUNG = """[PAGE 110]
 과 목 주 석 제62기 (당)기말 제61기 (전)기말
 I. 유 동 자 산 21,356,404,512,532 20,180,976,210,724
 1. 현금및현금성자산 6 3,458,217,651,048 3,622,371,844,804
+2. 매출채권 7 1,200,000,000,000 1,100,000,000,000
 자 산 총 계 86,532,745,699,428 61,990,426,835,548
 I. 유 동 부 채 13,871,980,126,883 14,747,260,718,483
+IV. 연 결 이 익 잉 여 금 20 3,000,000,000,000 2,500,000,000,000
 [PAGE 111]
 과 목 주 석 제62기 (당)기말 제61기 (전)기말
 자 본 총 계 57,496,949,405,446 37,258,539,898,529
@@ -135,6 +139,8 @@ class PrimaryStatementTests(unittest.TestCase):
         by_key = {(f.fiscal_year, f.standard_item): f for f in facts}
         self.assertEqual(by_key[2025, "revenue"].normalized_value, 12_636_199_000)
         self.assertEqual(by_key[2025, "cash"].normalized_value, 2_444_680_000)
+        self.assertEqual(by_key[2025, "accounts_receivable"].normalized_value, 4_254_855_000)
+        self.assertEqual(by_key[2025, "retained_earnings"].normalized_value, 582_129_000)
         self.assertEqual(by_key[2025, "total_liabilities"].normalized_value, 15_995_889_000)
         self.assertEqual(by_key[2025, "net_income"].original_value, 180_921)
         self.assertEqual(by_key[2025, "investing_cash_flow"].normalized_value, -960_896_000)
@@ -180,6 +186,9 @@ class PrimaryStatementTests(unittest.TestCase):
         by_key = {(f.fiscal_year, f.standard_item): f for f in facts}
         self.assertEqual(by_key[2025, "revenue"].normalized_value, 40_742_240_967_149)
         self.assertEqual(by_key[2025, "total_equity"].source_locator.split(" |")[0], "PAGE 111")
+        self.assertEqual(by_key[2025, "accounts_receivable"].normalized_value, 1_200_000_000_000)
+        self.assertEqual(by_key[2025, "retained_earnings"].normalized_value, 3_000_000_000_000)
+        self.assertEqual(by_key[2025, "retained_earnings"].source_locator.split(" |")[0], "PAGE 110")
         self.assertEqual(by_key[2024, "total_equity"].normalized_value, 37_258_539_898_529)
         self.assertEqual(by_key[2025, "investing_cash_flow"].normalized_value, -1_839_846_947_378)
 

@@ -53,9 +53,14 @@ def render_downloads(project, news_only):
     st.caption("원문 검토 기록이 포함된 자료입니다. 최종 판단은 사내 Claude에서 합니다." if current_review(project)
                else "미검토 초안입니다. 사내 Claude에서 원문 확인과 최종 검토를 진행하세요.")
     if project.facts and not news_only:
-        st.download_button("회사 정보 서식용 Word", build_word(project), "partner_company_brief.docx",
-                           "application/vnd.openxmlformats-officedocument.wordprocessingml.document", on_click="ignore")
-        st.caption("회사 소개·사업·지분 구조·재무표를 복사해 기존 양식에 옮길 수 있습니다. 상세 근거는 뒤쪽에 있으며, 최종 등급·승인 보고서는 아닙니다.")
+        _, evidence = packet_content(project)
+        raw_column, word_column = st.columns(2, gap="small")
+        raw_column.download_button("사내 스킬용 공개 원자료", evidence, "02_evidence.json",
+                                   "application/json", width="stretch", on_click="ignore")
+        word_column.download_button("회사 정보 서식용 Word", build_word(project), "partner_company_brief.docx",
+                                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                    width="stretch", on_click="ignore")
+        st.caption("원자료에는 추출값·기간·출처·검증 경고가 들어 있고 사내 등급 기준은 없습니다. Word는 기존 양식에 옮기는 공개자료 초안입니다.")
     with st.expander("추가 파일 · 사용 방법 · 스킬 설치"):
         st.write("받은 00_claude_start.md 하나를 사내 Claude에 첨부하면 됩니다. 스킬이 보고서 초안을 작성하고 중요한 예외만 질문합니다.")
         st.caption("비공개 재무제표는 사내 Claude에만 첨부하며, 내부 결과는 이 웹에 다시 올리지 않습니다.")

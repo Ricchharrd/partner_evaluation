@@ -20,9 +20,11 @@ KOREAN_TITLES = {
 LABELS = {
     "position": [
         ("cash", r"Cash and cash equivalents"),
+        ("accounts_receivable", r"Trade receivables"),
         ("current_assets", r"(?:Total )?current assets"),
         ("total_assets", r"Total assets"),
         ("total_equity", r"(?:Total )?equity"),
+        ("retained_earnings", r"Retained earnings"),
         ("current_liabilities", r"(?:Total )?current liabilities"),
     ],
     "profit": [
@@ -39,8 +41,10 @@ LABELS = {
 ROW_PATTERNS = {section: [(item, re.compile(r"^(?:" + label + r")(?=\s|$)", re.I))
                           for item, label in aliases] for section, aliases in LABELS.items()}
 KOREAN_LABELS = {
-    "position": [("cash", "현금및현금성자산"), ("current_assets", "유동자산"),
-                 ("total_assets", "자산총계"), ("total_equity", "자본총계"),
+    "position": [("cash", "현금및현금성자산"), ("accounts_receivable", "매출채권"),
+                 ("current_assets", "유동자산"), ("total_assets", "자산총계"),
+                 ("total_equity", "자본총계"), ("retained_earnings", "이익잉여금"),
+                 ("retained_earnings", "연결이익잉여금"),
                  ("current_liabilities", "유동부채")],
     "profit": [("revenue", "매출액"), ("operating_income", "영업이익"),
                ("net_income", "당기순이익")],

@@ -5,6 +5,7 @@ from datetime import date
 from io import BytesIO, StringIO
 import ipaddress
 import mimetypes
+import re
 from pathlib import Path
 import socket
 from urllib.parse import urlparse
@@ -175,15 +176,31 @@ def extract_pdf_text(content: bytes, max_pages: int | None = None) -> tuple[str,
     page_count = len(reader.pages)
     if max_pages is not None and page_count > max_pages:
         raise ValueError("PDF가 지정한 페이지 한도를 넘었습니다. 앞부분만 추출하지 않습니다.")
-    pages = [(page.extract_text() or "").strip() for page in reader.pages[:max_pages]]
+    pages = []
+    for page in reader.pages[:max_pages]:
+        plain = page.extract_text() or ""
+        # Some PDFs flatten an entire financial table into one text line.
+        # Layout mode keeps its row boundaries without relying on page numbers.
+        if any(len(line) > 500 for line in plain.splitlines()):
+            layout = page.extract_text(extraction_mode="layout") or ""
+            if len(layout.splitlines()) > len(plain.splitlines()):
+                plain = "\n".join(re.sub(r"[ \t]{2,}", "  ", line).rstrip()
+                                  for line in layout.splitlines())
+        pages.append(plain.strip())
     text = "\n\n".join(f"[PAGE {index}]\n{page}" for index, page in enumerate(pages, start=1) if page)
     average_chars = sum(len(page) for page in pages) / max(len(pages), 1)
     warnings = []
     if average_chars < 80:
         warnings.append("스캔 PDF로 추정됩니다. 이 환경에는 OCR/비전 추출이 연결되어 있지 않아 수동 입력이 필요합니다.")
+    elif unreadable_pdf_text(text):
+        warnings.append("PDF 글꼴 인코딩이 깨져 계정명을 읽을 수 없습니다. 이 문서는 숫자를 추측하지 않고 OCR 처리본, XBRL 또는 공식 표 파일이 필요합니다.")
     else:
         warnings.append("PDF 텍스트를 읽었습니다. 재무수치 추출 및 원문 대조는 별도 단계이며, 스캔 이미지의 숫자는 누락될 수 있습니다.")
     return text, warnings
+
+
+def unreadable_pdf_text(text: str) -> bool:
+    return text.count("\ufffd") / max(len(text), 1) > 0.03
 
 
 XBRL_ITEM_HINTS = {

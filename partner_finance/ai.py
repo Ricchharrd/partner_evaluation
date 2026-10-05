@@ -180,6 +180,10 @@ def extract_facts_from_text(
                     for match in [re.search(r"PAGE (\d+)", fact.source_locator)] if match
                 }),
             }
+    if "[PAGE " in text:
+        from .ingest import unreadable_pdf_text
+        if unreadable_pdf_text(text):
+            raise ValueError("PDF 글꼴 인코딩이 깨져 재무 계정명을 읽지 못했습니다. AI 호출을 중단했습니다. OCR 처리본, XBRL 또는 공식 표 파일을 사용해 주세요.")
     if not _chunk and len(text.encode("utf-8")) > CHUNK_BYTES and hasattr(provider, "approved_batch"):
         state = batch_state if batch_state is not None else {}
         return extract_batch(text, entity_id, source, provider, default_currency, default_scope,

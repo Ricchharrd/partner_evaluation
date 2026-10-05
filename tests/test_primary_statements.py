@@ -2,10 +2,12 @@ import hashlib
 import json
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 from partner_finance.ai import extract_facts_from_text
 from partner_finance.analysis import calculate_ratios
 from partner_finance.handoff import packet_content
+from partner_finance.ingest import extract_pdf_text, unreadable_pdf_text
 from partner_finance.primary_repair import repair_source_facts
 from partner_finance.primary_statements import extract_primary_statements, sufficient_primary_coverage
 from partner_finance.schema import AnalysisProject, EntityProfile, FinancialFact, SourceDocument
@@ -59,6 +61,67 @@ Separate statement of financial position
 Cash and cash equivalents 100 200
 """
 
+ACCIONA = """[PAGE 12]
+ACCIONA, S.A. AND SUBSIDIARIES
+Consolidated statement of financial position for the financial years 2025 and 2024
+(millions of euros)
+ASSETS  Notes  31.12.2025  31.12.2024
+Cash and cash equivalents 16 5,396 4,240
+CURRENT ASSETS 15,731 14,238
+TOTAL ASSETS 35,850 34,620
+EQUITY 6,285 6,376
+CURRENT LIABILITIES 13,239 14,242
+[PAGE 13]
+Consolidated income statement for the financial years 2025 and 2024
+(millions of euros)
+Notes 31.12.2025 31.12.2024
+Revenue 26 20,236 19,190
+OPERATING PROFIT 1,862 1,316
+YEAR’S PROFIT 1,129 609
+PROFIT ATTRIBUTABLE TO THE PARENT COMPANY 803 422
+[PAGE 17]
+Consolidated statement of cash flows for financial years 2025 and 2024
+(millions of euros)
+Notes 2025 2024
+CASH FLOWS FROM OPERATING ACTIVITIES 2,148 2,239
+CASH FLOWS FROM INVESTMENT ACTIVITIES -334 -2,465
+CASH FLOWS FROM FINANCING ACTIVITIES -520 760
+"""
+
+SAMSUNG = """[PAGE 110]
+2. 연결재무제표
+연 결  재 무  상 태 표
+제62기 : 2025년 12월 31일 현재
+제61기 : 2024년 12월 31일 현재
+삼성물산주식회사와 그 종속기업 (단위 : 원)
+과 목 주 석 제62기 (당)기말 제61기 (전)기말
+I. 유 동 자 산 21,356,404,512,532 20,180,976,210,724
+1. 현금및현금성자산 6 3,458,217,651,048 3,622,371,844,804
+자 산 총 계 86,532,745,699,428 61,990,426,835,548
+I. 유 동 부 채 13,871,980,126,883 14,747,260,718,483
+[PAGE 111]
+과 목 주 석 제62기 (당)기말 제61기 (전)기말
+자 본 총 계 57,496,949,405,446 37,258,539,898,529
+[PAGE 112]
+연 결 포 괄 손 익 계 산 서
+제62기 : 2025년 01월 01일부터 2025년 12월 31일까지
+제61기 : 2024년 01월 01일부터 2024년 12월 31일까지
+삼성물산주식회사와 그 종속기업 (단위 : 원)
+과 목 주석 제62기 (당)기 제61기 (전)기
+I. 매 출 액 29 40,742,240,967,149 42,103,238,027,336
+IV. 영 업 이 익 29 3,292,747,495,925 2,983,396,694,918
+VII. 당기순이익 3,906,652,564,846 2,772,012,091,811
+[PAGE 114]
+연 결 현 금 흐 름 표
+제62기 : 2025년 01월 01일부터 2025년 12월 31일까지
+제61기 : 2024년 01월 01일부터 2024년 12월 31일까지
+삼성물산주식회사와 그 종속기업 (단위 : 원)
+과 목 주 석 제62기 (당)기 제61기 (전)기
+Ⅰ.영업활동으로 인한 현금흐름 3,023,741,373,868 3,306,879,187,574
+II. 투자활동으로 인한 현금흐름 (1,839,846,947,378) (1,759,468,808,360)
+III. 재무활동으로 인한 현금흐름 (1,276,863,227,656) (1,298,327,291,405)
+"""
+
 
 class PrimaryStatementTests(unittest.TestCase):
     def setUp(self):
@@ -82,9 +145,57 @@ class PrimaryStatementTests(unittest.TestCase):
         self.assertAlmostEqual(margin.value, 648_760 / 12_636_199)
 
     def test_unknown_currency_does_not_get_assumed(self):
-        facts, warnings = extract_primary_statements(REPORT.split("[PAGE 288]")[0], "company", self.source)
+        unknown = REPORT.split("[PAGE 288]")[0].replace("€", "?")
+        facts, warnings = extract_primary_statements(unknown, "company", self.source)
         self.assertEqual(facts, [])
         self.assertTrue(warnings)
+
+    def test_acciona_latest_year_first_and_million_euros(self):
+        facts, warnings = extract_primary_statements(ACCIONA, "company", self.source)
+        self.assertTrue(sufficient_primary_coverage(facts), warnings)
+        by_key = {(f.fiscal_year, f.standard_item): f for f in facts}
+        self.assertEqual(by_key[2025, "revenue"].normalized_value, 20_236_000_000)
+        self.assertEqual(by_key[2024, "revenue"].normalized_value, 19_190_000_000)
+        self.assertEqual(by_key[2025, "net_income"].normalized_value, 1_129_000_000)
+        self.assertEqual(by_key[2025, "total_assets"].source_locator.split(" |")[0], "PAGE 12")
+        self.assertEqual(by_key[2025, "revenue"].period_start, "2025-01-01")
+        self.assertEqual(by_key[2025, "revenue"].period_end, "2025-12-31")
+
+    def test_non_calendar_year_uses_reported_closing_date(self):
+        report = ACCIONA.replace("31.12.2025", "30.06.2025").replace("31.12.2024", "30.06.2024")
+        facts, _ = extract_primary_statements(report, "company", self.source)
+        self.assertTrue(sufficient_primary_coverage(facts))
+        revenue = next(f for f in facts if f.fiscal_year == 2025 and f.standard_item == "revenue")
+        self.assertEqual((revenue.period_start, revenue.period_end), ("2024-07-01", "2025-06-30"))
+
+    def test_missing_closing_date_does_not_become_december(self):
+        report = ACCIONA.replace("31.12.2025", "2025").replace("31.12.2024", "2024")
+        facts, _ = extract_primary_statements(report, "company", self.source)
+        self.assertFalse(sufficient_primary_coverage(facts))
+        self.assertTrue(all(not fact.period_end for fact in facts))
+
+    def test_korean_statement_and_continuation_page(self):
+        facts, warnings = extract_primary_statements(SAMSUNG, "company", self.source)
+        self.assertTrue(sufficient_primary_coverage(facts), warnings)
+        by_key = {(f.fiscal_year, f.standard_item): f for f in facts}
+        self.assertEqual(by_key[2025, "revenue"].normalized_value, 40_742_240_967_149)
+        self.assertEqual(by_key[2025, "total_equity"].source_locator.split(" |")[0], "PAGE 111")
+        self.assertEqual(by_key[2024, "total_equity"].normalized_value, 37_258_539_898_529)
+        self.assertEqual(by_key[2025, "investing_cash_flow"].normalized_value, -1_839_846_947_378)
+
+    def test_layout_fallback_restores_flattened_table_rows(self):
+        class Page:
+            def extract_text(self, extraction_mode=None):
+                if extraction_mode == "layout":
+                    return "Header\nRevenue 2025 2024\nOperating profit 100 90"
+                return "Header " + "flattened table content " * 30
+
+        with patch("pypdf.PdfReader", return_value=SimpleNamespace(pages=[Page()])):
+            text, _ = extract_pdf_text(b"PDF")
+        self.assertIn("\nRevenue 2025 2024\n", text)
+
+    def test_unreadable_text_is_not_sent_to_ai(self):
+        self.assertTrue(unreadable_pdf_text("[PAGE 1]\n" + "�" * 100))
 
     def test_complete_primary_tables_bypass_paid_batch(self):
         class NoCallProvider:

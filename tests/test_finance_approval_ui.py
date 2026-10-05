@@ -37,13 +37,13 @@ class FinanceApprovalUITests(unittest.TestCase):
             source_id=source.source_id, source_locator="PAGE 12",
         ))
         recalculate(project)
-        first, second = MagicMock(), MagicMock()
+        first, second, third = MagicMock(), MagicMock(), MagicMock()
         with patch("partner_finance.simple_ui.st") as streamlit, \
                 patch("partner_finance.simple_ui.has_saved_news", return_value=False), \
                 patch("partner_finance.simple_ui.build_claude_start", return_value=b"start"), \
                 patch("partner_finance.simple_ui.build_word", return_value=b"word"), \
                 patch("partner_finance.simple_ui.build_handoff", return_value=b"zip"):
-            streamlit.columns.return_value = (first, second)
+            streamlit.columns.side_effect = [(first, second), (first, second, third)]
             render_downloads(project, news_only=False)
         raw = next(call for call in first.download_button.call_args_list
                    if call.args[0] == "사내 스킬용 공개 원자료")
@@ -51,6 +51,18 @@ class FinanceApprovalUITests(unittest.TestCase):
         packet = json.loads(raw.args[1])
         self.assertEqual(packet["facts"][0]["source_locator"], "PAGE 12")
         self.assertNotIn("policy_evaluation", packet)
+        excel = next(call for call in second.download_button.call_args_list
+                     if call.args[0] == "추출 재무정보 Excel")
+        self.assertEqual(excel.args[2], "partner_financials.xlsx")
+        from openpyxl import load_workbook
+        workbook = load_workbook(BytesIO(excel.args[1]), read_only=True)
+        self.assertIn("추출·정규화 데이터", workbook.sheetnames)
+        rows = list(workbook["추출·정규화 데이터"].values)
+        self.assertIn("revenue", rows[1])
+        self.assertIn("PAGE 12", rows[1])
+        self.assertIn(100_000_000, rows[1])
+        self.assertTrue(any(call.args[0] == "회사 정보 서식용 Word"
+                            for call in third.download_button.call_args_list))
 
     def test_company_input_precedes_compact_saved_selection_and_reuses_company(self):
         from partner_finance.storage import ProjectStore

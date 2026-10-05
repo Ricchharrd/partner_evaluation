@@ -54,20 +54,21 @@ def render_downloads(project, news_only):
                else "미검토 초안입니다. 사내 Claude에서 원문 확인과 최종 검토를 진행하세요.")
     if project.facts and not news_only:
         _, evidence = packet_content(project)
-        raw_column, word_column = st.columns(2, gap="small")
+        raw_column, excel_column, word_column = st.columns(3, gap="small")
         raw_column.download_button("사내 스킬용 공개 원자료", evidence, "02_evidence.json",
                                    "application/json", width="stretch", on_click="ignore")
+        excel_column.download_button("추출 재무정보 Excel", build_excel(project), "partner_financials.xlsx",
+                                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                     width="stretch", on_click="ignore")
         word_column.download_button("회사 정보 서식용 Word", build_word(project), "partner_company_brief.docx",
                                     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                                     width="stretch", on_click="ignore")
-        st.caption("원자료에는 추출값·기간·출처·검증 경고가 들어 있고 사내 등급 기준은 없습니다. Word는 기존 양식에 옮기는 공개자료 초안입니다.")
+        st.caption("JSON은 사내 스킬 전달용, Excel은 추출 재무정보 확인용입니다. 두 파일 모두 사내 등급 기준은 포함하지 않습니다. Word는 기존 양식에 옮기는 공개자료 초안입니다.")
     with st.expander("추가 파일 · 사용 방법 · 스킬 설치"):
         st.write("재무자료가 있으면 02_evidence.json을 사내 스킬에 전달하세요. 뉴스만 검토할 때는 00_claude_start.md를 사용할 수 있습니다. 같은 근거를 중복 첨부할 필요는 없습니다.")
         st.caption("비공개 재무제표는 사내 Claude에만 첨부하며, 내부 결과는 이 웹에 다시 올리지 않습니다.")
-        st.caption("Excel과 아래 파일은 공개자료 예비 산출물입니다. 내부 맥락을 결합한 최종 보고서는 사내 Claude에서 작성합니다.")
+        st.caption("아래 파일은 공개자료 예비 산출물입니다. 내부 맥락을 결합한 최종 보고서는 사내 Claude에서 작성합니다.")
         st.download_button("전체 근거 ZIP (필요할 때만)", build_handoff(project), "claude_review_packet.zip", "application/zip", on_click="ignore")
-        if project.facts and not news_only:
-            st.download_button("Excel 재무표", build_excel(project), "partner_financials.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", on_click="ignore")
         brief, _ = packet_content(project)
         st.download_button("요약 파일", brief, "01_review_brief.md", "text/markdown", on_click="ignore")
         st.caption("사내 Claude 스킬은 내부 배포 경로에서만 설치합니다. 공개 웹에서는 제공하지 않습니다.")

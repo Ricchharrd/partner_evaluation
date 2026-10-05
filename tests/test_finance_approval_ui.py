@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from contextlib import contextmanager
 from io import BytesIO
 from unittest.mock import MagicMock, patch
 
@@ -21,6 +22,63 @@ def finance_app():
 
 
 class FinanceApprovalUITests(unittest.TestCase):
+    @contextmanager
+    def empty_result_app(self, *, text="[PAGE 1] Revenue 100", fail=False):
+        upload = BytesIO(b"public report")
+        upload.name, upload.type = "public.pdf", "application/pdf"
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps({
+            "status": "completed", "output": [{"type": "message", "content": [
+                {"type": "output_text", "text": json.dumps({"facts": [], "warnings": ["No matching facts"]})}]}]}).encode()
+        with tempfile.TemporaryDirectory() as root, \
+                patch("streamlit.file_uploader", return_value=upload), \
+                patch("partner_finance.ingest.parse_uploaded_file", return_value=([], [], text)), \
+                patch("urllib.request.urlopen", return_value=response,
+                      side_effect=RuntimeError("API unavailable") if fail else None) as request:
+            app = AppTest.from_function(finance_app, default_timeout=20)
+            app.session_state.test_root = root
+            app.run()
+            next(b for b in app.button if b.label == "다음: 분석 준비").click().run()
+            yield app, request
+
+    def test_zero_facts_returns_to_preparation_with_collapsed_history(self):
+        with self.empty_result_app() as (app, request):
+            next(b for b in app.button if b.label == "승인하고 전체 분석 시작 (유료)").click().run()
+            self.assertFalse(app.exception)
+            self.assertEqual(request.call_count, 1)
+            self.assertTrue(any(b.label == "다음: 분석 준비" for b in app.button))
+            history = next(e for e in app.expander if e.label.startswith("이전 분석 기록"))
+            self.assertFalse(history.proto.expanded)
+            self.assertFalse(app.get("download_button"))
+            self.assertFalse(app.warning)
+
+    def test_api_failure_does_not_repeat_or_leave_consent_active(self):
+        with self.empty_result_app(fail=True) as (app, request):
+            next(b for b in app.button if b.label == "승인하고 전체 분석 시작 (유료)").click().run()
+            self.assertFalse(app.exception)
+            self.assertTrue(any("API unavailable" in e.value for e in app.error))
+            self.assertEqual(app.session_state.hitl_tickets, {})
+            app.run()
+            self.assertEqual(request.call_count, 1)
+            self.assertTrue(any(b.label == "다음: 분석 준비" for b in app.button))
+
+    def test_large_request_still_requires_cost_confirmation(self):
+        with self.empty_result_app(text="[PAGE 1] " + "Revenue 100 " * 2500) as (app, request):
+            button = next(b for b in app.button if b.label == "승인하고 전체 분석 시작 (유료)")
+            self.assertTrue(button.disabled)
+            next(c for c in app.checkbox if "추가 비용 가능성" in c.label).check().run()
+            self.assertFalse(next(b for b in app.button if b.label == "승인하고 전체 분석 시작 (유료)").disabled)
+            self.assertEqual(request.call_count, 0)
+
+    def test_missing_prepared_file_never_calls_api(self):
+        with self.empty_result_app() as (app, request):
+            project = app.session_state.project
+            del app.session_state[f"finance_request_{project.project_id}"]
+            app.run()
+            self.assertEqual(request.call_count, 0)
+            self.assertTrue(any(b.label == "파일 선택으로 돌아가기" for b in app.button))
+            self.assertFalse(any("분석 시작" in b.label for b in app.button))
+
     def test_approval_resumes_upload_and_shows_results_once(self):
         upload = BytesIO(b"public report")
         upload.name = "public.pdf"
@@ -41,18 +99,25 @@ class FinanceApprovalUITests(unittest.TestCase):
             app = AppTest.from_function(finance_app, default_timeout=20)
             app.session_state.test_root = root
             app.run()
-            next(b for b in app.button if b.label == "이 자료로 분석하기").click().run()
+            next(b for b in app.button if b.label == "다음: 분석 준비").click().run()
             self.assertEqual(request.call_count, 0)
             self.assertEqual(app.session_state.hitl_pending["action"], "upload")
-            self.assertFalse(any(b.label == "이 자료로 분석하기" for b in app.button))
-            next(b for b in app.button if b.label == "취소").click().run()
+            self.assertFalse(any(b.label == "다음: 분석 준비" for b in app.button))
+            self.assertEqual(len(app.get("file_uploader")), 0)
+            next(b for b in app.button if b.label == "이전: 파일 다시 선택").click().run()
             self.assertEqual(request.call_count, 0)
-            self.assertTrue(any(b.label == "이 자료로 분석하기" for b in app.button))
-            next(b for b in app.button if b.label == "이 자료로 분석하기").click().run()
-            next(b for b in app.button if b.label == "공개자료로 승인하고 실행").click().run()
+            self.assertTrue(any(b.label == "다음: 분석 준비" for b in app.button))
+            next(b for b in app.button if b.label == "다음: 분석 준비").click().run()
+            next(b for b in app.button if b.label == "승인하고 전체 분석 시작 (유료)").click().run()
             self.assertFalse(app.exception)
             self.assertEqual(request.call_count, 1)
-            self.assertTrue(any(h.value == "분석 결과와 사내 전달자료" for h in app.subheader))
+            self.assertTrue(any(h.value == "3. 분석 결과를 확인해 주세요" for h in app.subheader))
+            self.assertEqual(len(app.get("download_button")), 0)
+            next(b for b in app.button if b.label == "다음: 사내 전달자료 받기").click().run()
+            self.assertTrue(any(h.value == "4. 사내 Claude로 전달하세요" for h in app.subheader))
+            self.assertFalse(app.exception)
+            self.assertTrue(app.get("download_button"))
+            next(b for b in app.button if b.label == "이전: 분석 결과 확인").click().run()
             app.run()
             self.assertEqual(request.call_count, 1)
 

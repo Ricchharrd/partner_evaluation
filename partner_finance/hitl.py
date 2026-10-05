@@ -76,21 +76,23 @@ def authorize_request(project, body, *, action=None):
     st.rerun()
 
 
-def render_hitl(project, persist, *, include_fact_review=True, show_review=True, allowed_actions=None):
+def render_hitl(project, persist, *, include_fact_review=True, show_review=True, allowed_actions=None,
+                finance_flow=False):
     import streamlit as st
     approved_action = None
     pending = st.session_state.get("hitl_pending")
     if pending and pending["project_id"] == project.project_id:
         info = preflight(pending["body"])
         prefix = "hitl_" + info["hash"][:16]
-        st.subheader("한 번 확인하고 바로 실행하세요")
+        st.subheader("2. 실행 내용을 확인해 주세요" if finance_flow else "한 번 확인하고 바로 실행하세요")
         task = "공개 기사·사업정보 조사" if info["web_tools"] else "공개자료 AI 분석"
         st.write(f"**{project.entity.legal_name} · {task}**")
         st.caption("버튼을 누르면 이번 자료·검색어가 공개자료이며 회사 정책상 개인 OpenAI API 전송이 허용됨을 확인하고, 유료 요청 1회를 승인합니다. 비공개 자료는 사내 Claude에서만 처리하세요.")
         if info["bounded_search"]:
             st.caption("웹 검색 최대 3회 · 간략 검색 · 답변 길이 제한 적용. 검색·토큰 비용은 발생하며 사전 금액은 확정할 수 없습니다.")
         if info["high_volume"]:
-            st.warning("입력이 크거나 검색 범위가 큽니다. 비용을 줄이려면 취소 후 필요한 페이지·범위만 선택하세요.")
+            st.info("문서 전체를 분석하므로 처리시간과 비용이 늘어날 수 있습니다. 실행 후 결과 화면으로 자동 이동합니다." if finance_flow
+                    else "입력이 크거나 검색 범위가 큽니다. 비용을 줄이려면 취소 후 필요한 페이지·범위만 선택하세요.")
         if info["blocked"] or info["sensitive"] or info["over_limit"]:
             st.error("보안 또는 처리 한도로 실행할 수 없습니다. 자료를 제거하거나 범위를 줄여 다시 준비하세요. 승인으로 우회할 수 없습니다.")
         with st.expander("전송 내용·모델·처리 한도 보기"):
@@ -102,7 +104,7 @@ def render_hitl(project, persist, *, include_fact_review=True, show_review=True,
         if not reachable:
             st.info("이 요청을 실행하려면 자료 준비 단계의 원래 분석 경로로 돌아가거나 취소하세요.")
         ready = volume and reachable and not any(info[k] for k in ("blocked", "sensitive", "over_limit"))
-        if st.button("공개자료로 승인하고 실행", key=prefix + "approve", disabled=not ready, type="primary"):
+        if st.button("승인하고 전체 분석 시작 (유료)" if finance_flow else "공개자료로 승인하고 실행", key=prefix + "approve", disabled=not ready, type="primary"):
             key = project.project_id + ":" + info["hash"]
             project.narrative.setdefault("hitl_approvals", []).append({**info, "at": utc_now(),
                 "reviewer": "현재 세션 사용자 (본인 미인증)", "consent_method": "명시적 실행 버튼",
@@ -114,7 +116,7 @@ def render_hitl(project, persist, *, include_fact_review=True, show_review=True,
             approved_action = pending.get("action")
             if approved_action is None:
                 st.info("상세 도구의 실행 승인을 기록했습니다. 해당 도구에서 실행하면 동일 요청 1회만 전송됩니다.")
-        if st.button("취소", key=prefix + "cancel"):
+        if st.button("이전: 파일 다시 선택" if finance_flow else "취소", key=prefix + "cancel"):
             st.session_state.pop("hitl_pending", None)
             st.rerun()
     if not show_review or (not project.facts and not project.narrative.get("research_briefs")):

@@ -20,6 +20,17 @@ def packet_content(project):
     from .hitl import current_review
     reviewed = current_review(project)
     review_record = deepcopy(project.narrative.get("hitl_review", {}))
+    conflicts = []
+    seen_sources = set()
+    if project.narrative.get("analysis_route") != "news_only":
+        for entry in reversed(project.narrative.get("api_usage", [])):
+            source_id = entry.get("source_id")
+            if source_id and source_id not in seen_sources:
+                seen_sources.add(source_id)
+                conflicts.extend(deepcopy(entry.get("conflicts", [])))
+    conflict_source_ids = {c.get("source_id") for row in conflicts for c in row.get("candidates", [])}
+    conflict_sources = [{"id": s.source_id, "name": s.name, "url": s.url} for s in project.sources
+                        if s.source_id in conflict_source_ids]
     news_only = project.narrative.get("analysis_route") == "news_only" or not project.facts
     if not news_only and not is_current(project):
         raise ValueError("최신 자료로 계산한 뒤 전달자료를 생성하십시오.")
@@ -50,6 +61,8 @@ def packet_content(project):
             values.append("검증 오류·확인 필요" if blocked else f"{f.effective_value:,.0f} {f.currency} [{f.fact_id}]" if f and f.effective_value is not None else "미확인")
         brief.append(STANDARD_ITEMS[item] + " / " + " / ".join(values))
     brief += ["## 누락·검증 경고 (전부 확인)"]
+    if conflicts:
+        brief.append(f"분할 추출 상충 {len(conflicts)}항목은 계산에서 제외했습니다. extraction_conflicts의 후보와 원문을 확인하고 임의 선택하지 마십시오.")
     for issue in project.validations:
         if issue.fiscal_year in years or issue.fiscal_year is None:
             brief.append(f"[{issue.severity}] FY{issue.fiscal_year}: {issue.message}")
@@ -86,6 +99,8 @@ def packet_content(project):
         "research_briefs": project.narrative.get("research_briefs", []),
         "business_evidence": project.narrative.get("business_evidence", []), "updates": project.narrative.get("partner_updates", []),
         "collection_warnings": project.narrative.get("collection_warnings", []) if not news_only else [],
+        "extraction_conflicts": conflicts,
+        "extraction_conflict_sources": conflict_sources,
         "hitl": {"review_current": reviewed, "review": review_record, "history": project.narrative.get("hitl_review_history", [])},
     }
     return "\n\n".join(brief).encode("utf-8"), json.dumps(evidence, ensure_ascii=False, indent=2, allow_nan=False).encode("utf-8")

@@ -121,19 +121,8 @@ review_points, limitations, source_citations이며 목록 항목은 간결한 �
     return result
 
 
-def extract_facts_from_text(
-    text: str,
-    entity_id: str,
-    source: SourceDocument,
-    provider: AIProvider,
-    default_currency: str = "미확인",
-    default_scope: str = "연결",
-    cache: dict | None = None,
-    force_refresh: bool = False,
-) -> tuple[list[FinancialFact], list[str], dict]:
-    from .document_selection import select_financial_text, SELECTION_VERSION
-    from .numeric_input import parse_number
-    from .account_guards import mapping_problem, normalize_scope
+def extraction_request(text, default_currency="미확인", default_scope="연결"):
+    from .document_selection import select_financial_text
     clipped_text, selection_warnings = select_financial_text(text)
     payload = {
         "document_text": clipped_text,
@@ -162,18 +151,36 @@ APM 또는 회사 정의 현금흐름을 정식 재무제표의 영업/투자/�
 관계자 거래(of which: related parties) 열을 해당 연도의 총액으로 사용하지 마라.
 요청 default_scope와 다른 범위의 값은 제외하라. 범위가 불명확하면 미확인으로 남겨라.
 해당 정의가 원문에 있으면 warnings에 한계를 적어라. 근거 문구가 없는 값은 제외한다."""
+    return system, payload, clipped_text, selection_warnings
+
+
+def extract_facts_from_text(
+    text: str, entity_id: str, source: SourceDocument, provider: AIProvider,
+    default_currency: str = "미확인", default_scope: str = "연결",
+    cache: dict | None = None, force_refresh: bool = False,
+    batch_state: dict | None = None, progress=None, _chunk=False,
+) -> tuple[list[FinancialFact], list[str], dict]:
+    from .document_selection import SELECTION_VERSION
+    from .numeric_input import parse_number
+    from .account_guards import mapping_problem, normalize_scope
+    from .finance_batch import CHUNK_BYTES, extract_batch
+    if not _chunk and len(text.encode("utf-8")) > CHUNK_BYTES and hasattr(provider, "approved_batch"):
+        state = batch_state if batch_state is not None else {}
+        return extract_batch(text, entity_id, source, provider, default_currency, default_scope,
+                             state, force_refresh=force_refresh, progress=progress)
+    system, payload, clipped_text, selection_warnings = extraction_request(text, default_currency, default_scope)
+    output_tokens = 6000 if _chunk else (None if getattr(provider, "supports_unbounded_output", False) else 16000)
     cache_key = hashlib.sha256(json.dumps({"text_hash": hashlib.sha256(text.encode()).hexdigest(),
         "payload": payload, "system": system, "selection": SELECTION_VERSION,
         "provider": getattr(provider, "name", ""), "model": getattr(provider, "model", ""),
         "entity": entity_id, "source": source.source_id,
-        "output_mode": "provider-default" if getattr(provider, "supports_unbounded_output", False) else "16000"}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        "output_mode": output_tokens}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     cached = cache.get(cache_key) if cache is not None and not force_refresh else None
     if cached:
         result, meta = deepcopy(cached["result"]), deepcopy(cached["meta"])
         meta.update(cache_hit=True, original_usage=meta.get("usage", {}), usage={})
     else:
-        result, meta = provider.generate_json(system, payload,
-            max_tokens=None if getattr(provider, "supports_unbounded_output", False) else 16000)
+        result, meta = provider.generate_json(system, payload, max_tokens=output_tokens)
         meta = {**meta, "cache_hit": False}
     meta.update(original_characters=len(text), selected_characters=len(clipped_text), selection_version=SELECTION_VERSION)
     raw_result = deepcopy(result)

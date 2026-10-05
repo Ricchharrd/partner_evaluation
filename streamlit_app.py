@@ -365,7 +365,8 @@ def ai_report_panel(project: AnalysisProject):
                     if any(f.source_id == source_id for f in project.facts):
                         raise ValueError("이미 추출된 문서입니다. 상단의 보고서 추가·재분석에서 교체 여부를 확인하십시오.")
                     facts, warnings, meta = extract_facts_from_text(text, project.entity.entity_id, source, provider,
-                        default_scope=project.entity.reporting_scope, cache=project.narrative.setdefault("extraction_cache", {}))
+                        default_scope=project.entity.reporting_scope, cache=project.narrative.setdefault("extraction_cache", {}),
+                        batch_state=st.session_state.setdefault(f"finance_batch_{project.project_id}_{source_id}", {}))
                     project.narrative.setdefault("api_usage", []).append(meta)
                     facts, period_warnings = filter_interim_comparatives(project.facts, facts)
                     warnings.extend(period_warnings)

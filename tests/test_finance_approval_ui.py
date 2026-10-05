@@ -44,22 +44,26 @@ class FinanceApprovalUITests(unittest.TestCase):
             self.assertEqual(app.session_state.project.project_id, saved.project_id)
             self.assertEqual(len(store.list_projects("test-user")), 1)
 
-    def test_over_one_megabyte_reaches_approval_and_sends_full_text_once(self):
+    def test_over_one_megabyte_is_approved_as_a_bounded_plan(self):
         text = "[PAGE 1] " + "Revenue 100 " * 120000
         with self.empty_result_app(text=text) as (app, request):
             self.assertFalse(app.exception)
             self.assertFalse(app.error)
             self.assertGreater(app.session_state.hitl_pending["info"]["input_bytes"], 1000000)
-            self.assertNotIn("max_output_tokens", app.session_state.hitl_pending["body"])
+            manifest = app.session_state.hitl_pending["body"]
+            self.assertEqual(manifest["kind"], "finance_batch_v1")
+            count = manifest["batch"]["pending_chunks"]
+            self.assertGreater(count, 1)
             next(c for c in app.checkbox if "추가 비용 가능성" in c.label).check().run()
-            with patch("partner_finance.ingest.parse_uploaded_file", side_effect=AssertionError("Do not parse again")):
+            with patch("partner_finance.ingest.parse_uploaded_file", side_effect=AssertionError("Do not parse again")), \
+                    patch("partner_finance.finance_batch.time.sleep"):
                 next(b for b in app.button if b.label == "승인하고 전체 분석 시작 (유료)").click().run()
             self.assertFalse(app.exception)
             self.assertFalse(app.error)
-            self.assertEqual(request.call_count, 1)
-            body = json.loads(request.call_args.args[0].data)
-            self.assertNotIn("max_output_tokens", body)
-            self.assertEqual(json.loads(body["input"][1]["content"])["document_text"], text)
+            self.assertEqual(request.call_count, count)
+            bodies = [json.loads(call.args[0].data) for call in request.call_args_list]
+            self.assertTrue(all(body["max_output_tokens"] == 6000 for body in bodies))
+            self.assertTrue(all(len(json.loads(body["input"][1]["content"])["document_text"].encode()) <= 20000 for body in bodies))
             self.assertEqual(request.call_args.kwargs["timeout"], 600)
 
     def test_link_download_is_reused_for_approval_and_source_url_saved(self):
@@ -79,6 +83,29 @@ class FinanceApprovalUITests(unittest.TestCase):
             self.assertFalse(app.exception)
             self.assertEqual(app.session_state.project.sources[0].url, url)
             self.assertEqual(app.session_state.project.sources[0].source_type, "공개 링크")
+
+    def test_failed_batch_keeps_prepared_file_and_reapproves_only_remaining(self):
+        text = ''.join(f'[PAGE {i}]\n' + 'Public report. ' * 1200 for i in range(1,4))
+        with self.empty_result_app(text=text) as (app, request), patch('partner_finance.finance_batch.time.sleep'):
+            response = request.return_value
+            request.side_effect = [response, RuntimeError('connection ended')]
+            next(c for c in app.checkbox if '추가 비용 가능성' in c.label).check().run()
+            next(b for b in app.button if b.label == '승인하고 전체 분석 시작 (유료)').click().run()
+            self.assertFalse(app.exception)
+            self.assertEqual(request.call_count, 2)
+            self.assertTrue(any(b.label == '남은 구간 이어서 분석 준비' for b in app.button))
+            app.run()
+            self.assertEqual(request.call_count, 2)
+            request.side_effect = None
+            with patch('partner_finance.ingest.parse_uploaded_file', side_effect=AssertionError('no reparse')):
+                next(b for b in app.button if b.label == '남은 구간 이어서 분석 준비').click().run()
+                self.assertEqual(request.call_count, 2)
+                self.assertEqual(app.session_state.hitl_pending['body']['batch']['completed_chunks'], 1)
+                next(c for c in app.checkbox if '추가 비용 가능성' in c.label).check().run()
+                next(b for b in app.button if b.label == '승인하고 전체 분석 시작 (유료)').click().run()
+            self.assertFalse(app.exception)
+            self.assertEqual(request.call_count, 4)
+            self.assertEqual(app.session_state.hitl_tickets, {})
 
     def test_landing_page_requires_document_selection_without_ai_call(self):
         url = "https://example.com/ir"

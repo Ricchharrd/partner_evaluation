@@ -19,7 +19,7 @@ from .hitl import (authorize_request, render_hitl, render_evidence_review, curre
                    clear_action_tickets, quick_review_blocker, record_quick_review, fingerprint)
 
 
-FINANCE_UI_VERSION = 8
+FINANCE_UI_VERSION = 9
 STEPS = ["1. 자료 준비", "2. 결과 확인", "3. 사내 전달"]
 
 
@@ -281,6 +281,11 @@ def render(store, owner, secret, panels):
                 st.caption("같은 추출 결과는 재사용합니다. 계산·문서 출력에는 API를 호출하지 않습니다. 실제 청구액은 제공사에서 확인하세요.")
                 if usage:
                     st.json(usage[-1])
+        latest_batch = next((m for m in reversed(project.narrative.get("api_usage", [])) if m.get("chunks")), None)
+        if latest_batch and latest_batch.get("conflicts"):
+            with st.expander("분할 분석에서 상충한 수치와 근거", expanded=True):
+                st.warning("다른 금액, 기간 또는 범위로 추출된 항목은 계산에서 제외했습니다. 원문 대조가 필요합니다.")
+                st.json(latest_batch["conflicts"])
         return
 
     approved_action = None
@@ -289,11 +294,12 @@ def render(store, owner, secret, panels):
         error_key = f"finance_error_{project.project_id}"
         context = st.session_state.get(context_key)
         awaiting_approval = bool(pending and pending.get("action") == "upload")
+        resumable = bool(context and context.get("batch_state", {}).get("status") in {"paused", "running"})
         run_upload = False
         upload = None
         document_url = requested_url = link_to_fetch = ""
         replace_confirmed = force_refresh = False
-        if awaiting_approval:
+        if awaiting_approval or resumable:
             if not context:
                 st.warning("선택한 파일의 준비 정보가 만료됐습니다. 파일을 다시 선택해 주세요. 아직 유료 요청은 실행하지 않았습니다.")
                 if st.button("파일 선택으로 돌아가기", type="primary"):
@@ -312,8 +318,24 @@ def render(store, owner, secret, panels):
                     st.link_button("공개 원문 확인", document_url)
                     st.caption("웹 서버가 공개 원문을 직접 받았습니다. 회사 PC 파일은 업로드하지 않았습니다.")
                 st.caption(f"{len(context['content']) / 1024 / 1024:.1f} MB, 문서 전체 분석, 결과는 사내 검토용 초안")
-                approved_action = render_hitl(project, persist, show_review=False,
-                                             allowed_actions=["upload"], finance_flow=True)
+                if awaiting_approval:
+                    approved_action = render_hitl(project, persist, show_review=False,
+                                                 allowed_actions=["upload"], finance_flow=True)
+                else:
+                    job = context["batch_state"]
+                    st.error(st.session_state.get(error_key) or "분석 실행이 중단되었습니다.")
+                    st.write(f"완료 구간 {len(job.get('completed', {}))}/{job.get('summary', {}).get('total_chunks', '?')}. 완료된 구간은 다시 호출하지 않습니다.")
+                    st.caption("이 브라우저 세션에서만 이어갈 수 있습니다. 재시작 전 API 사용 내역을 확인하세요. 남은 구간은 새 승인 후 실행합니다.")
+                    if st.button("남은 구간 이어서 분석 준비", type="secondary" if job.get("can_split") else "primary"):
+                        approved_action = "upload"
+                    if job.get("can_split") and st.button("실패 구간을 더 작게 나누어 분석 준비", type="primary"):
+                        job["split_requested"] = True
+                        approved_action = "upload"
+                    if st.button("이 분석을 닫고 다른 자료 선택"):
+                        st.session_state.pop(context_key, None)
+                        st.session_state.pop(error_key, None)
+                        clear_action_tickets(project)
+                        st.rerun()
         else:
             st.session_state.pop(context_key, None)
             st.subheader("1. 공개 재무자료 링크를 넣어 주세요")
@@ -388,7 +410,10 @@ def render(store, owner, secret, panels):
                 from .ai import extract_facts_from_text
                 with st.status("보고서를 처리하고 있습니다. 완료되면 자동으로 이동합니다.", expanded=True) as progress:
                     st.write("파일 읽기와 전체 문서 준비")
-                    source, _ = store.save_source_bytes(project.project_id, upload.name, upload.getvalue(), upload.type or "")
+                    prepared = st.session_state[context_key]
+                    source = prepared.get("source")
+                    if source is None:
+                        source, _ = store.save_source_bytes(project.project_id, upload.name, upload.getvalue(), upload.type or "")
                     existing_source = next((s for s in project.sources if s.sha256 == source.sha256), None)
                     if existing_source:
                         source = existing_source
@@ -398,7 +423,7 @@ def render(store, owner, secret, panels):
                         source.url = document_url
                         source.source_type = "공개 링크"
                         source.note = "외부 공개 원문을 서버에서 직접 수집. 입력 주소: " + requested_url
-                    prepared = st.session_state[context_key]
+                    prepared["source"] = source
                     if "parsed" not in prepared:
                         prepared["parsed"] = parse_uploaded_file(upload.name, upload.getvalue(), project.entity.entity_id, source)
                     # Approval reruns the script; reuse the exact prepared text instead of rereading a long PDF.
@@ -407,10 +432,20 @@ def render(store, owner, secret, panels):
                         st.write("AI 재무수치 추출, 요청 승인 확인")
                         provider = OpenAIProvider(secret("OPENAI_API_KEY"), secret("OPENAI_MODEL", DEFAULT_OPENAI_MODEL), timeout=600, approval=lambda body: authorize_request(project, body, action="upload"))
                         if provider.available:
+                            batch_bar, batch_message = st.empty(), st.empty()
+                            def batch_progress(event):
+                                total, completed = event["total"], event["completed"]
+                                batch_bar.progress(completed / max(1, total), text=f"분할 분석 {completed}/{total}구간 완료")
+                                if event["phase"] in {"waiting", "retry_wait"}:
+                                    batch_message.info(f"API 처리량 조절을 위해 {event['seconds']:g}초 대기합니다. 완료된 구간은 유지됩니다.")
+                                elif event["phase"] == "extracting":
+                                    batch_message.info(f"구간 {event['chunk']}, PDF 페이지 {event['pages'] or '표식 없음'} 처리 중")
                             facts, ai_warnings, meta = extract_facts_from_text(text, project.entity.entity_id, source, provider,
                                 default_scope=project.entity.reporting_scope,
-                                cache=project.narrative.setdefault("extraction_cache", {}), force_refresh=force_refresh)
+                                cache=project.narrative.setdefault("extraction_cache", {}), force_refresh=force_refresh,
+                                batch_state=prepared.setdefault("batch_state", {}), progress=batch_progress)
                             project.narrative.setdefault("api_usage", []).append(meta)
+                            st.session_state.pop(error_key, None)
                             warnings.extend(ai_warnings)
                             facts, period_warnings = filter_interim_comparatives(
                                 [fact for fact in project.facts if fact.source_id != source.source_id], facts)
@@ -449,17 +484,21 @@ def render(store, owner, secret, panels):
                     st.session_state[f"next_step_{project.project_id}"] = 1
                 st.rerun()
             except Exception as exc:
-                st.session_state[error_key] = f"분석을 완료하지 못했습니다: {exc} 기존 결과는 유지했습니다. 파일을 확인한 뒤 다시 준비해 주세요."
+                st.session_state[error_key] = f"분석을 완료하지 못했습니다: {exc} 기존 결과는 유지했습니다."
                 st.rerun()
             finally:
                 clear_action_tickets(project)
                 active_pending = st.session_state.get("hitl_pending")
-                if not active_pending or active_pending["project_id"] != project.project_id:
+                preserve_batch = st.session_state.get(context_key, {}).get("batch_state", {}).get("status") in {"paused", "running"}
+                if (not active_pending or active_pending["project_id"] != project.project_id) and not preserve_batch:
                     st.session_state.pop(context_key, None)
         if project.narrative.get("collection_warnings") and not awaiting_approval:
             with st.expander("이전 분석 기록과 상세 메시지 (현재 실행 상태가 아닙니다)"):
                 for warning in project.narrative["collection_warnings"]:
                     st.write(warning)
+                usage = project.narrative.get("api_usage", [])
+                if usage and usage[-1].get("conflicts"):
+                    st.json(usage[-1]["conflicts"])
     else:
         st.subheader("공개 뉴스로 사내 검토를 준비하세요")
         approved_action = render_hitl(project, persist, show_review=False, allowed_actions=["research"])

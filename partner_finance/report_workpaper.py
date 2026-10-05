@@ -102,6 +102,18 @@ def build_report_workpaper(evidence):
         lines.append(f"- [{cell(issue.get('severity'))}] FY{cell(issue.get('fiscal_year'))}: {cell(issue.get('message'))}")
     for warning in evidence.get("collection_warnings", []):
         lines.append("- [추출·수집 한계] " + cell(warning))
+    if evidence.get("extraction_conflicts"):
+        lines.append("### 분할 추출 상충으로 계산에서 제외한 항목")
+        lines.append("아래 후보는 계산 입력이 아닙니다. 원문에서 법인, 기간, 단위와 값을 확인하기 전 임의 선택하지 마십시오. 전체 후보 근거는 extraction_conflicts에 있습니다.")
+        for conflict in evidence["extraction_conflicts"]:
+            candidates = conflict.get("candidates", [])
+            lines.append(f"FY{cell(conflict.get('year'))} {cell(conflict.get('item'))}: 상충 후보 {len(candidates)}건, 판단 보류")
+            for candidate in candidates:
+                lines.append(f"후보 {cell(candidate.get('normalized_value'))} {cell(candidate.get('currency'))}, "
+                             f"기간 {cell(candidate.get('period_start'))} ~ {cell(candidate.get('period_end'))}, "
+                             f"{cell(candidate.get('reporting_scope'))}, 근거 {cell(candidate.get('source_id'))}: {cell(candidate.get('source_locator'))}")
+        for source in evidence.get("extraction_conflict_sources", []):
+            lines.append(f"상충 원문 {cell(source.get('id'))}: {cell(source.get('name'))} / {cell(source.get('url'))}")
     lines += [f"- 수치 원문 검토: {'현재 자료 확인 기록 있음' if evidence.get('hitl', {}).get('review_current') else '미완료 또는 변경됨'}",
               "## 3. 공개 현안 및 사업역량"]
     selected = context["briefs"][-2:]

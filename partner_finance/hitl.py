@@ -111,17 +111,25 @@ def render_hitl(project, persist, *, include_fact_review=True, show_review=True,
     pending = st.session_state.get("hitl_pending")
     if pending and pending["project_id"] == project.project_id:
         info = preflight(pending["body"])
+        batch = pending["body"].get("batch") if pending["body"].get("kind") == "finance_batch_v1" else None
         prefix = "hitl_" + info["hash"][:16]
         st.subheader("2. 실행 내용을 확인해 주세요" if finance_flow else "한 번 확인하고 바로 실행하세요")
         task = "공개 기사·사업정보 조사" if info["web_tools"] else "공개자료 AI 분석"
         st.write(f"**{project.entity.legal_name} · {task}**")
-        st.caption("버튼을 누르면 이번 자료·검색어가 공개자료이며 회사 정책상 개인 OpenAI API 전송이 허용됨을 확인하고, 유료 요청 1회를 승인합니다. 비공개 자료는 사내 Claude에서만 처리하세요.")
+        st.caption("버튼을 누르면 이번 자료·검색어가 공개자료이며 회사 정책상 개인 OpenAI API 전송이 허용됨을 확인합니다. 비공개 자료는 사내 Claude에서만 처리하세요.")
+        if batch:
+            st.info(f"전체 {batch['total_chunks']}구간 중 {batch['completed_chunks']}구간 완료, 남은 {batch['pending_chunks']}구간을 순서대로 분석합니다.")
+            st.write(f"기본 {batch['pending_chunks']}회, 일시적 제한 재시도 포함 최대 {batch['max_requests']}회 유료 요청을 승인합니다.")
+            st.caption("재무제표와 주석 후보를 우선 처리한 뒤 나머지 페이지도 분석합니다. 요청 사이 대기시간이 있으며 중단 시 완료 구간을 현재 세션에 보관합니다.")
+            st.caption("일시적 속도 제한만 구간별 1회 재시도합니다 (최대 90초 대기). 결제 문제, 큰 요청, 시간 초과는 자동 재시도하지 않습니다. 각 구간 출력은 최대 6,000토큰이며 잘린 응답을 완료로 처리하지 않습니다.")
+        else:
+            st.caption("유료 요청 1회를 승인합니다.")
         if info["bounded_search"]:
             st.caption("웹 검색 최대 3회 · 간략 검색 · 답변 길이 제한 적용. 검색·토큰 비용은 발생하며 사전 금액은 확정할 수 없습니다.")
         if info["high_volume"]:
             st.info("문서 전체를 분석하므로 처리시간과 비용이 늘어날 수 있습니다. 실행 후 결과 화면으로 자동 이동합니다." if finance_flow
                     else "입력이 크거나 검색 범위가 큽니다. 비용을 줄이려면 취소 후 필요한 페이지·범위만 선택하세요.")
-        if finance_flow and info["output_limit"] is None:
+        if finance_flow and info["output_limit"] is None and not batch:
             st.caption("보고서 전체 전송, 앱의 입력량·출력 토큰 절약 제한 해제. 모델 자체 처리량과 계정 사용 한도는 적용됩니다. 비용이 커질 수 있습니다.")
         if info["sensitive_terms"]:
             st.warning("본문에 기밀유지 관련 용어가 있으나 문서 기밀 표시로 확정하지 않았습니다. 원문이 실제 공개 보고서인지 확인한 뒤 승인하세요. 자동 탐지는 보안 승인을 대신하지 않습니다.")
@@ -142,14 +150,16 @@ def render_hitl(project, persist, *, include_fact_review=True, show_review=True,
             project.narrative.setdefault("hitl_approvals", []).append({**info, "at": utc_now(),
                 "reviewer": "현재 세션 사용자 (본인 미인증)", "consent_method": "명시적 실행 버튼",
                 "classification": "공개자료 (사용자 선언)", "basis": "공개성·외부전송 허용 여부에 대한 사용자 확인; 출처 검증 아님",
-                "declared_scope": task, "action": pending.get("action"), "scope": "동일 요청 1회·10분 이내"})
+                "declared_scope": task, "action": pending.get("action"),
+                "scope": f"동일 분할 계획 최대 {batch['max_requests']}회, 10분 이내 시작" if batch else "동일 요청 1회·10분 이내",
+                **({"batch": batch} if batch else {})})
             persist()
             st.session_state.setdefault("hitl_tickets", {})[key] = {"expires": time.time() + 600}
             del st.session_state["hitl_pending"]
             approved_action = pending.get("action")
             if approved_action is None:
                 st.info("상세 도구의 실행 승인을 기록했습니다. 해당 도구에서 실행하면 동일 요청 1회만 전송됩니다.")
-        if st.button("이전: 파일 다시 선택" if finance_flow else "취소", key=prefix + "cancel"):
+        if st.button(("취소: 완료 구간 보관" if batch and batch['completed_chunks'] else "이전: 파일 다시 선택") if finance_flow else "취소", key=prefix + "cancel"):
             st.session_state.pop("hitl_pending", None)
             st.rerun()
     if not show_review or (not project.facts and not project.narrative.get("research_briefs")):

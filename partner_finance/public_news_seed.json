@@ -1,0 +1,60 @@
+{
+  "version": "official-news-20261005-1",
+  "checked_at": "2026-10-05T00:00:00+00:00",
+  "companies": {
+    "Webuild": [
+      {
+        "title": "추가 공사비 220억 유로 청구 보도에 대한 회사 입장 발표",
+        "summary": "Webuild는 이탈리아 정부에 추가 공사비 220억 유로를 요청했다는 보도를 부인했다. 회사는 해당 금액이 공사 회계에 기록된 유보금과 변경사항의 총액이라고 설명했으며, 이 요약은 회사 측 입장으로 독립적인 분쟁 판단은 아니다.",
+        "published_at": "2026-09-09",
+        "source_name": "Webuild 공식 발표",
+        "source_url": "https://www.webuildgroup.com/en/media/press-notes/webuild-no-request-italian-government-eu22-billion-extra-project-costs/",
+        "topic": "소송 및 규제"
+      },
+      {
+        "title": "2026년 상반기 실적, 매출 67억 유로와 수주잔고 537억 유로 발표",
+        "summary": "Webuild는 상반기 매출 67억 유로, EBITDA 6억7,300만 유로, 순현금 1억1,000만 유로를 발표했다. 수주잔고는 537억 유로이며, 회사 발표 수치로 감사 여부와 상세 재무 기준은 원문에서 확인해야 한다.",
+        "published_at": "2026-07-29",
+        "source_name": "Webuild 공식 발표",
+        "source_url": "https://www.webuildgroup.com/en/media/press-releases/webuild-results-june-30-2026/",
+        "topic": "실적 및 재무"
+      }
+    ],
+    "Acciona": [
+      {
+        "title": "RAIL4EARTH 참여, 철도 인프라 기후 대응 기술 개발",
+        "summary": "Acciona는 유럽 RAIL4EARTH 연구사업에서 철도 인프라의 기후 대응력 향상을 위한 모니터링 기술과 지속가능한 대응 방안을 개발한다고 밝혔다. 연구개발 참여 소식이며 신규 EPC 수주 발표와는 구분된다.",
+        "published_at": "2026-09-09",
+        "source_name": "Acciona 공식 발표",
+        "source_url": "https://www.acciona.com/updates/articles/acciona-strengthens-the-climate-resilience-of-rail-infrastructure-rail-4-earth",
+        "topic": "안전 및 환경"
+      },
+      {
+        "title": "상반기 매출 101.4억 유로, 인프라 부문 매출 12.2% 증가",
+        "summary": "Acciona는 2026년 상반기 그룹 매출 101.4억 유로, 인프라 부문 매출 44.8억 유로를 발표했다. 그룹 EBITDA는 자산매각 이익 감소 등의 영향으로 보고 기준 25.9% 줄었지만 회사는 연간 목표를 유지했다.",
+        "published_at": "2026-07-30",
+        "source_name": "Acciona 공식 발표",
+        "source_url": "https://www.acciona.com/updates/news/acciona-posts-revenues-1014-billion-99-maintains-2026-targets",
+        "topic": "실적 및 재무"
+      }
+    ],
+    "Rönesans Holding": [
+      {
+        "title": "Digital Realty와 튀르키예 데이터센터 개발 파트너십",
+        "summary": "Rönesans는 Digital Realty와 데이터센터 개발 및 운영 파트너십을 발표했다. 앙카라 첫 단계는 22MW 이상의 IT 용량과 2028년 운영 개시를 목표로 하며, 장기 200MW와 최대 30억 달러는 확정 실적이 아닌 계획이다.",
+        "published_at": "2026-10-01",
+        "source_name": "Rönesans 공식 발표",
+        "source_url": "https://ronesans.com/en/news/global-investment-in-turkiye-s-digital-future",
+        "topic": "수주 및 사업"
+      },
+      {
+        "title": "DAPEK 산업단지 전력 및 용수 기반시설 1단계 추진",
+        "summary": "Rönesans는 DAPEK 산업단지의 전력 및 용수 기반시설 투자를 진행 중이라고 발표했다. 변전소는 2027년 상반기 가동을 계획하고 있으며, 초당 300리터 용수 공급체계의 전처리 시설과 관로 공사를 시작했다고 설명했다.",
+        "published_at": "2026-09-14",
+        "source_name": "Rönesans 공식 발표",
+        "source_url": "https://ronesans.com/en/news/dapek-infrastructure-investments",
+        "topic": "수주 및 사업"
+      }
+    ]
+  }
+}

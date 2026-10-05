@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import unicodedata
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from .hitl import authorize_request
@@ -128,8 +129,38 @@ def company_roles(project):
 
 
 def ensure_featured_companies(store, owner):
+    seed = json.loads(Path(__file__).with_name("public_news_seed.json").read_text(encoding="utf-8"))
     for profile in FEATURED_COMPANIES:
-        add_company(store, owner, profile["name"])
+        project = add_company(store, owner, profile["name"])
+        if add_public_news_seed(project, seed):
+            store.save(project, owner)
+
+
+def add_public_news_seed(project, seed):
+    """Install sourced starter news once, without overriding review decisions or newer news."""
+    profile = featured_company(project.entity.legal_name)
+    if not profile or seed["version"] in project.narrative.get("news_seed_versions", []):
+        return False
+    briefs = project.narrative.setdefault("research_briefs", [])
+    known = {a.get("source_url") for b in briefs for a in b.get("articles", [])}
+    articles = [{**row, "id": hashlib.sha256(row["source_url"].encode()).hexdigest()[:24],
+                 "source_type": "기업 공식 발표", "curated": True}
+                for row in seed["companies"].get(profile["name"], [])
+                if row["source_url"] not in known and safe_source(row["source_url"])]
+    if articles:
+        briefs.insert(0, {
+            "id": seed["version"], "kind": NEWS_VERSION, "articles": articles,
+            "collected_at": seed["checked_at"], "status": "검토 대기",
+            "identity": {"legal_name": project.entity.legal_name, "country": project.entity.country},
+            "provider": "curated_public_sources", "model": "", "usage": {},
+            "sections": [{"text": f"{a['title']}\n발표일: {a['published_at']}\n{a['summary']}",
+                          "citations": [{"title": a["title"], "url": a["source_url"], "quote": ""}]}
+                         for a in articles]})
+        project.narrative.pop("final", None)
+        if project.status == "검토 완료":
+            project.status = "재검토 필요"
+    project.narrative.setdefault("news_seed_versions", []).append(seed["version"])
+    return True
 
 
 def add_company(store, owner, name):

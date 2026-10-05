@@ -13,7 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from partner_finance.runtime import refresh_finance_modules
-refresh_finance_modules("finance-ux-20261005-2")
+refresh_finance_modules("public-links-news-dashboard-20261005-1")
 
 from partner_finance.ai import extract_facts_from_text, generate_project_narrative
 from partner_finance.openai_provider import OpenAIProvider, DEFAULT_OPENAI_MODEL
@@ -571,7 +571,7 @@ def main():
         from importlib import reload
         from partner_finance import simple_ui
         # Cloud may rerun the entry point while retaining the previous imported UI module.
-        if getattr(simple_ui, "FINANCE_UI_VERSION", 0) < 6:
+        if getattr(simple_ui, "FINANCE_UI_VERSION", 0) < 7:
             reload(simple_ui)
         st.title("재무 상세분석")
         st.caption("공개자료를 분석하고, 사내 Claude에서 이어서 검토합니다.")

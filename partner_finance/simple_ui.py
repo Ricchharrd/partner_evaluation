@@ -15,15 +15,15 @@ from .handoff import build_handoff, packet_content, build_claude_start
 from .public_gpt import build_public_gpt_packet
 from .discovery import find_candidates, collect_latest
 from .hitl import (authorize_request, render_hitl, render_evidence_review, current_review,
-                   clear_action_tickets, quick_review_blocker, record_quick_review)
+                   clear_action_tickets, quick_review_blocker, record_quick_review, fingerprint)
 
 
-FINANCE_UI_VERSION = 6
+FINANCE_UI_VERSION = 7
 STEPS = ["1. 자료 준비", "2. 결과 확인", "3. 사내 전달"]
 
 
 def render_progress(current, news_only=False):
-    labels = ["뉴스 준비" if news_only else "파일 선택", "실행 승인", "결과 확인", "사내 전달"]
+    labels = ["뉴스 준비" if news_only else "자료 선택", "실행 승인", "결과 확인", "사내 전달"]
     items = []
     for index, label in enumerate(labels):
         active = index == current
@@ -292,6 +292,7 @@ def render(store, owner, secret, panels):
         awaiting_approval = bool(pending and pending.get("action") == "upload")
         run_upload = False
         upload = None
+        document_url = requested_url = link_to_fetch = ""
         replace_confirmed = force_refresh = False
         if awaiting_approval:
             if not context:
@@ -304,33 +305,60 @@ def render(store, owner, secret, panels):
             upload = SimpleNamespace(name=context["name"], type=context["type"],
                                      getvalue=lambda: context["content"])
             replace_confirmed, force_refresh = context["replace"], context["refresh"]
+            document_url = context.get("url", "")
+            requested_url = context.get("requested_url", "")
             with st.container(border=True):
                 st.write(f"선택한 파일: **{upload.name}**")
+                if document_url:
+                    st.link_button("공개 원문 확인", document_url)
+                    st.caption("웹 서버가 공개 원문을 직접 받았습니다. 회사 PC 파일은 업로드하지 않았습니다.")
                 st.caption(f"{len(context['content']) / 1024 / 1024:.1f} MB, 문서 전체 분석, 결과는 사내 검토용 초안")
                 approved_action = render_hitl(project, persist, show_review=False,
                                              allowed_actions=["upload"], finance_flow=True)
         else:
             st.session_state.pop(context_key, None)
-            st.subheader("1. 분석할 파일을 선택하세요")
+            st.subheader("1. 공개 재무자료 링크를 넣어 주세요")
             if st.session_state.get(error_key):
                 st.error(st.session_state[error_key])
-            st.write("공개된 재무보고서 PDF, Excel 또는 CSV 파일을 올려 주세요.")
-            st.caption("전체 문서 분석 모드입니다. PDF는 다음 화면에서 전송 내용과 비용 발생을 확인한 뒤 실행합니다.")
+            st.write("회사 홈페이지의 공개 PDF 주소를 넣으면 서버가 원문을 직접 가져옵니다. PC에 저장하거나 다시 업로드할 필요가 없습니다.")
+            st.caption("링크 확인에는 AI 검색을 사용하지 않습니다. 전체 문서 AI 분석은 다음 화면에서 승인한 뒤 실행합니다. 내부 공유주소나 로그인 정보가 포함된 링크는 넣지 마세요.")
             if project.facts:
                 st.info(f"기존 재무수치 {len(project.facts)}건은 저장되어 있습니다. 새 분석이 실패해도 기존 수치는 유지합니다.")
             elif project.sources:
-                st.info("이전 분석에서 재무수치를 확보하지 못했습니다. 파일을 다시 선택해 전체 문서 분석을 진행하세요.")
+                st.info("이전 분석에서 재무수치를 확보하지 못했습니다. 공개 원문 링크 또는 파일로 다시 진행할 수 있습니다.")
             with st.container(border=True):
-                upload = st.file_uploader("공개 재무보고서 파일", type=["pdf", "xlsx", "csv"],
-                                          key=f"finance_upload_{project.project_id}")
-                if upload is not None:
-                    st.caption(f"선택 완료: {upload.name}")
+                choice_key = f"finance_input_choice_{project.project_id}"
+                input_mode = st.radio("자료 가져오는 방법", ["공개 링크 (권장)", "파일 업로드"],
+                                      index=1 if st.session_state.get(choice_key) == "파일 업로드" else 0,
+                                      horizontal=True, key=f"finance_input_{project.project_id}")
+                st.session_state[choice_key] = input_mode
+                if input_mode == "공개 링크 (권장)":
+                    requested_url = st.text_input("공개 재무보고서 또는 IR 페이지 주소",
+                        placeholder="https://기업공식사이트/.../annual-report.pdf",
+                        key=f"finance_url_{project.project_id}").strip()
+                    link_to_fetch = requested_url
+                    candidates = st.session_state.get(f"finance_links_{project.project_id}")
+                    if candidates and candidates["requested_url"] == requested_url:
+                        options = candidates["links"]
+                        selection = st.selectbox("페이지에서 찾은 문서 중 분석할 보고서를 선택하세요", range(len(options)),
+                            index=None, placeholder="기업명과 연도를 확인해 선택하세요",
+                            format_func=lambda i: options[i]["title"] + " | " + options[i]["url"],
+                            key=f"finance_document_{project.project_id}_{fingerprint(requested_url)[:12]}")
+                        link_to_fetch = options[selection]["url"] if selection is not None else ""
+                        st.caption("페이지에 있는 다운로드 링크만 읽었습니다. 자동 검색이나 AI 비용은 발생하지 않았습니다.")
+                    st.caption("회사 정책상 이용 가능한 공개 원문만 입력하세요. NASCA 문서를 복호화하거나 사내 접근제한을 해제하는 기능이 아닙니다.")
+                else:
+                    upload = st.file_uploader("공개 재무보고서 파일", type=["pdf", "xlsx", "csv"],
+                                              key=f"finance_upload_{project.project_id}")
+                    st.caption("업로드가 회사 보안정책으로 제한되면 공개 링크 방식을 사용하세요. 비공개 자료는 사내 Claude에서만 처리합니다.")
+                    if upload is not None:
+                        st.caption(f"선택 완료: {upload.name}")
                 if project.sources or project.facts:
                     with st.expander("기존 자료 재분석 옵션"):
                         if project.facts:
                             replace_confirmed = st.checkbox("같은 파일의 기존 값은 이력에 보관하고 새 추출값으로 교체합니다.")
                         force_refresh = st.checkbox("저장 결과 대신 새 AI 추출 (추가 비용)", value=False)
-                run_upload = st.button("다음: 분석 준비", disabled=upload is None, type="primary")
+                run_upload = st.button("다음: 분석 준비", disabled=upload is None and not link_to_fetch, type="primary")
                 st.caption("지금은 파일을 읽고 요청을 준비합니다. AI 비용은 다음 화면에서 승인할 때 발생합니다. 표 형식 파일은 AI 없이 처리될 수 있습니다.")
             if has_saved_news(project):
                 st.caption("저장된 기업 뉴스는 결과와 함께 재사용합니다. 뉴스 검색을 다시 실행할 필요가 없습니다.")
@@ -338,12 +366,25 @@ def render(store, owner, secret, panels):
                 st.caption("뉴스 없이 재무분석부터 진행할 수 있습니다. 뉴스 업데이트는 대시보드에서 별도로 실행합니다.")
         if run_upload or approved_action == "upload":
             try:
+                if run_upload and link_to_fetch:
+                    from .public_documents import fetch_public_document
+                    st.session_state.pop(error_key, None)
+                    with st.spinner("공개 원문을 서버에서 가져오고 있습니다. AI 호출은 하지 않습니다..."):
+                        document = fetch_public_document(link_to_fetch)
+                    if document["kind"] == "links":
+                        st.session_state[f"finance_links_{project.project_id}"] = {
+                            "requested_url": requested_url, "links": document["links"]}
+                        st.rerun()
+                    document_url = document["url"]
+                    upload = SimpleNamespace(name=document["name"], type=document["type"],
+                                             getvalue=lambda: document["content"])
                 if upload is None:
-                    raise ValueError("공개 보고서 파일을 선택한 뒤 다시 분석해 주세요.")
+                    raise ValueError("공개 원문 링크를 입력하거나 보고서 파일을 선택해 주세요.")
                 if run_upload:
                     st.session_state.pop(error_key, None)
                     st.session_state[context_key] = {"name": upload.name, "type": upload.type or "",
-                        "content": upload.getvalue(), "replace": replace_confirmed, "refresh": force_refresh}
+                        "content": upload.getvalue(), "replace": replace_confirmed, "refresh": force_refresh,
+                        "url": document_url, "requested_url": requested_url}
                 from .ingest import parse_uploaded_file
                 from .ai import extract_facts_from_text
                 with st.status("보고서를 처리하고 있습니다. 완료되면 자동으로 이동합니다.", expanded=True) as progress:
@@ -354,6 +395,10 @@ def render(store, owner, secret, panels):
                         source = existing_source
                         if any(f.source_id == source.source_id for f in project.facts) and not replace_confirmed:
                             raise ValueError("기존 값 교체 확인란을 선택하십시오. 재분석에는 API 비용이 발생할 수 있습니다.")
+                    if document_url:
+                        source.url = document_url
+                        source.source_type = "공개 링크"
+                        source.note = "외부 공개 원문을 서버에서 직접 수집. 입력 주소: " + requested_url
                     facts, warnings, text = parse_uploaded_file(upload.name, upload.getvalue(), project.entity.entity_id, source)
                     if text:
                         st.write("AI 재무수치 추출, 요청 승인 확인")

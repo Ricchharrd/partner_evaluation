@@ -15,7 +15,7 @@ def refresh_finance_modules(release):
         importlib.invalidate_caches()
         # Dependencies first: views bind helper functions with from-imports.
         for name in ("periods", "document_selection", "hitl", "openai_provider", "ai",
-                     "ingest", "validation", "analysis", "workflow", "workpaper",
+                     "ingest", "public_documents", "validation", "analysis", "workflow", "workpaper",
                      "reports", "handoff", "research", "market_news", "dashboard",
                      "simple_ui", "market_ui"):
             module = sys.modules.get("partner_finance." + name)

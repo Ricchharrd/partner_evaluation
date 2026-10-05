@@ -22,6 +22,37 @@ def finance_app():
 
 
 class FinanceApprovalUITests(unittest.TestCase):
+    def test_link_download_is_reused_for_approval_and_source_url_saved(self):
+        url = "https://example.com/public.pdf"
+        document = {"kind": "document", "url": url, "name": "public.pdf", "type": "application/pdf", "content": b"public report"}
+        with self.empty_result_app() as (app, request), \
+                patch("partner_finance.public_documents.fetch_public_document", return_value=document) as fetch:
+            next(b for b in app.button if b.label == "이전: 파일 다시 선택").click().run()
+            next(r for r in app.radio if r.label == "자료 가져오는 방법").set_value("공개 링크 (권장)").run()
+            next(t for t in app.text_input if t.label == "공개 재무보고서 또는 IR 페이지 주소").set_value(url).run()
+            next(b for b in app.button if b.label == "다음: 분석 준비").click().run()
+            self.assertEqual(fetch.call_count, 1)
+            self.assertEqual(request.call_count, 0)
+            next(b for b in app.button if b.label == "승인하고 전체 분석 시작 (유료)").click().run()
+            self.assertEqual(fetch.call_count, 1)
+            self.assertEqual(request.call_count, 1)
+            self.assertFalse(app.exception)
+            self.assertEqual(app.session_state.project.sources[0].url, url)
+            self.assertEqual(app.session_state.project.sources[0].source_type, "공개 링크")
+
+    def test_landing_page_requires_document_selection_without_ai_call(self):
+        url = "https://example.com/ir"
+        with self.empty_result_app() as (app, request), patch("partner_finance.public_documents.fetch_public_document",
+                return_value={"kind": "links", "url": url, "links": [{"title": "Report 2025", "url": url + "/report.pdf"}]}):
+            next(b for b in app.button if b.label == "이전: 파일 다시 선택").click().run()
+            next(r for r in app.radio if r.label == "자료 가져오는 방법").set_value("공개 링크 (권장)").run()
+            next(t for t in app.text_input if t.label == "공개 재무보고서 또는 IR 페이지 주소").set_value(url).run()
+            next(b for b in app.button if b.label == "다음: 분석 준비").click().run()
+            self.assertFalse(app.exception)
+            self.assertEqual(request.call_count, 0)
+            self.assertTrue(app.selectbox)
+            self.assertTrue(next(b for b in app.button if b.label == "다음: 분석 준비").disabled)
+
     @contextmanager
     def empty_result_app(self, *, text="[PAGE 1] Revenue 100", fail=False):
         upload = BytesIO(b"public report")
@@ -38,6 +69,7 @@ class FinanceApprovalUITests(unittest.TestCase):
             app = AppTest.from_function(finance_app, default_timeout=20)
             app.session_state.test_root = root
             app.run()
+            next(r for r in app.radio if r.label == "자료 가져오는 방법").set_value("파일 업로드").run()
             next(b for b in app.button if b.label == "다음: 분석 준비").click().run()
             yield app, request
 
@@ -99,6 +131,7 @@ class FinanceApprovalUITests(unittest.TestCase):
             app = AppTest.from_function(finance_app, default_timeout=20)
             app.session_state.test_root = root
             app.run()
+            next(r for r in app.radio if r.label == "자료 가져오는 방법").set_value("파일 업로드").run()
             next(b for b in app.button if b.label == "다음: 분석 준비").click().run()
             self.assertEqual(request.call_count, 0)
             self.assertEqual(app.session_state.hitl_pending["action"], "upload")

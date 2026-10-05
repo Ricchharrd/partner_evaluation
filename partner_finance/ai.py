@@ -164,6 +164,22 @@ def extract_facts_from_text(
     from .numeric_input import parse_number
     from .account_guards import mapping_problem, normalize_scope
     from .finance_batch import CHUNK_BYTES, extract_batch
+    if not _chunk and not force_refresh and "[PAGE " in text and default_scope == "연결":
+        from .primary_statements import extract_primary_statements, sufficient_primary_coverage
+        primary, primary_warnings = extract_primary_statements(text, entity_id, source, default_scope)
+        if sufficient_primary_coverage(primary):
+            primary_warnings.append(
+                "공식 연결 재무제표의 2개년 표에서 핵심 수치를 확인했습니다. "
+                "본문·주석·별도 재무제표의 동명 항목은 섞지 않았습니다. 원문 대조는 여전히 필요합니다."
+            )
+            return primary, primary_warnings, {
+                "provider": "원문 표 파싱", "model": "primary-statements-1", "cache_hit": False,
+                "source_id": source.source_id, "usage": {}, "original_characters": len(text),
+                "selected_characters": 0, "primary_statement_pages": sorted({
+                    int(match.group(1)) for fact in primary
+                    for match in [re.search(r"PAGE (\d+)", fact.source_locator)] if match
+                }),
+            }
     if not _chunk and len(text.encode("utf-8")) > CHUNK_BYTES and hasattr(provider, "approved_batch"):
         state = batch_state if batch_state is not None else {}
         return extract_batch(text, entity_id, source, provider, default_currency, default_scope,

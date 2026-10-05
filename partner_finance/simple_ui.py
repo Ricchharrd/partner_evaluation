@@ -1,5 +1,6 @@
 from datetime import date
 from copy import deepcopy
+from pathlib import Path
 from types import SimpleNamespace
 import streamlit as st
 
@@ -224,6 +225,44 @@ def render(store, owner, secret, panels):
         summary[0].metric("추출한 재무수치", f"{len(project.facts) if not news_only else 0}건")
         summary[1].metric("분석 연도", ", ".join(str(y) for y in sorted({f.fiscal_year for f in project.facts})) if not news_only and project.facts else "해당 없음")
         summary[2].metric("수치 오류", f"{errors}건")
+        latest_batch = next((m for m in reversed(project.narrative.get("api_usage", []))
+                             if m.get("chunks") and m.get("conflicts") and not m.get("superseded_by")), None)
+        if latest_batch and not news_only:
+            source = next((s for s in project.sources if s.source_id == latest_batch.get("source_id")), None)
+            st.warning(f"이전 분할 추출에서 상충한 항목 {len(latest_batch['conflicts'])}개가 계산에서 빠졌습니다. "
+                       "추출 건수가 있어도 재무비율은 비어 있을 수 있습니다.")
+            if source and (source.local_path or source.url):
+                st.write("공식 연결 재무제표 표로 다시 대조할 수 있습니다. 기존 수치는 이력에 보관하고 "
+                         "새 결과는 원문 검토가 필요한 초안으로 표시합니다. AI 비용은 발생하지 않습니다.")
+                if st.button("원문 재대조로 복구", type="primary"):
+                    try:
+                        content = None
+                        if source.local_path:
+                            root = Path(store.root).resolve()
+                            candidate = (root / source.local_path).resolve()
+                            if root in candidate.parents and candidate.is_file():
+                                content = candidate.read_bytes()
+                        if content is None and source.url:
+                            from .public_documents import fetch_public_document
+                            with st.spinner("공식 원문을 다시 받아 재무제표 표를 확인하고 있습니다..."):
+                                document = fetch_public_document(source.url)
+                            if document["kind"] != "document" or not document["name"].lower().endswith(".pdf"):
+                                raise ValueError("원문 링크에서 PDF를 받지 못했습니다.")
+                            content = document["content"]
+                        if content is None:
+                            raise ValueError("저장된 PDF를 찾지 못했습니다. 공식 공개 링크로 새로 분석해 주세요.")
+                        from .primary_repair import repair_source_facts
+                        with st.spinner("연결 재무제표를 다시 대조하고 있습니다..."):
+                            repaired = deepcopy(project)
+                            repair_source_facts(repaired, source, content)
+                            store.save(repaired, owner)
+                            st.session_state.project = repaired
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"재대조하지 못했습니다: {exc} 기존 결과는 유지했습니다.")
+            with st.expander("이전 추출에서 상충한 항목 보기"):
+                st.caption("서로 다른 표·주석의 값을 임의로 합치지 않았습니다.")
+                st.json(latest_batch["conflicts"])
         if project.facts and not news_only:
             st.caption("표시된 재무값은 업로드한 재무제표의 보고 법인 기준입니다. 사업부 실적과 모회사 연결재무는 분리해 확인하세요.")
             with st.expander("재무비율과 계산 결과 보기", expanded=True):
@@ -281,11 +320,6 @@ def render(store, owner, secret, panels):
                 st.caption("같은 추출 결과는 재사용합니다. 계산·문서 출력에는 API를 호출하지 않습니다. 실제 청구액은 제공사에서 확인하세요.")
                 if usage:
                     st.json(usage[-1])
-        latest_batch = next((m for m in reversed(project.narrative.get("api_usage", [])) if m.get("chunks")), None)
-        if latest_batch and latest_batch.get("conflicts"):
-            with st.expander("분할 분석에서 상충한 수치와 근거", expanded=True):
-                st.warning("다른 금액, 기간 또는 범위로 추출된 항목은 계산에서 제외했습니다. 원문 대조가 필요합니다.")
-                st.json(latest_batch["conflicts"])
         return
 
     approved_action = None
@@ -342,7 +376,7 @@ def render(store, owner, secret, panels):
             if st.session_state.get(error_key):
                 st.error(st.session_state[error_key])
             st.write("회사 홈페이지의 공개 PDF 주소를 넣으면 서버가 원문을 직접 가져옵니다. PC에 저장하거나 다시 업로드할 필요가 없습니다.")
-            st.caption("링크 확인에는 AI 검색을 사용하지 않습니다. 전체 문서 AI 분석은 다음 화면에서 승인한 뒤 실행합니다. 내부 공유주소나 로그인 정보가 포함된 링크는 넣지 마세요.")
+            st.caption("링크 확인에는 AI 검색을 사용하지 않습니다. 공식 연결 재무제표 표를 먼저 읽고, 부족할 때만 승인 후 AI 분석을 시도합니다. 내부 공유주소나 로그인 정보가 포함된 링크는 넣지 마세요.")
             if project.facts:
                 st.info(f"기존 재무수치 {len(project.facts)}건은 저장되어 있습니다. 새 분석이 실패해도 기존 수치는 유지합니다.")
             elif project.sources:
@@ -380,7 +414,7 @@ def render(store, owner, secret, panels):
                             replace_confirmed = st.checkbox("같은 파일의 기존 값은 이력에 보관하고 새 추출값으로 교체합니다.")
                         force_refresh = st.checkbox("저장 결과 대신 새 AI 추출 (추가 비용)", value=False)
                 run_upload = st.button("다음: 분석 준비", disabled=upload is None and not link_to_fetch, type="primary")
-                st.caption("지금은 파일을 읽고 요청을 준비합니다. AI 비용은 다음 화면에서 승인할 때 발생합니다. 표 형식 파일은 AI 없이 처리될 수 있습니다.")
+                st.caption("공식 연결 재무제표 표를 충분히 읽으면 AI 비용 없이 처리합니다. 표에서 핵심값을 찾지 못하면 승인 후 AI 분석을 시도합니다.")
             if has_saved_news(project):
                 st.caption("저장된 기업 뉴스는 결과와 함께 재사용합니다. 뉴스 검색을 다시 실행할 필요가 없습니다.")
             else:
@@ -429,9 +463,21 @@ def render(store, owner, secret, panels):
                     # Approval reruns the script; reuse the exact prepared text instead of rereading a long PDF.
                     facts, warnings, text = deepcopy(prepared["parsed"])
                     if text:
-                        st.write("AI 재무수치 추출, 요청 승인 확인")
+                        st.write("공식 재무제표 표에서 핵심 수치를 먼저 확인")
+                        from .primary_statements import extract_primary_statements, sufficient_primary_coverage
+                        primary, primary_warnings = extract_primary_statements(
+                            text, project.entity.entity_id, source, project.entity.reporting_scope)
                         provider = OpenAIProvider(secret("OPENAI_API_KEY"), secret("OPENAI_MODEL", DEFAULT_OPENAI_MODEL), timeout=600, approval=lambda body: authorize_request(project, body, action="upload"))
-                        if provider.available:
+                        if sufficient_primary_coverage(primary) and not force_refresh:
+                            facts = primary
+                            warnings.extend(primary_warnings)
+                            warnings.append("공식 연결 재무제표 표의 핵심값을 AI 호출 없이 읽었습니다. 담당자의 원문 대조가 필요합니다.")
+                            meta = {"provider": "원문 표 파싱", "model": "primary-statements-1",
+                                    "source_id": source.source_id, "usage": {}, "cache_hit": False}
+                            project.narrative.setdefault("api_usage", []).append(meta)
+                        elif provider.available:
+                            warnings.extend(primary_warnings)
+                            st.write("요청한 새 AI 추출로 진행" if force_refresh else "표에서 핵심값을 찾지 못해 승인된 AI 분석으로 진행")
                             batch_bar, batch_message = st.empty(), st.empty()
                             def batch_progress(event):
                                 total, completed = event["total"], event["completed"]
@@ -451,7 +497,8 @@ def render(store, owner, secret, panels):
                                 [fact for fact in project.facts if fact.source_id != source.source_id], facts)
                             warnings.extend(period_warnings)
                         else:
-                            warnings.append("PDF 자동 수치 추출은 OPENAI_API_KEY 설정이 필요합니다. 현재 원문만 저장했습니다.")
+                            warnings.extend(primary_warnings)
+                            warnings.append("공식 표에서 핵심값을 충분히 읽지 못했습니다. 추가 PDF AI 분석에는 OPENAI_API_KEY 설정이 필요합니다.")
                         if facts:
                             st.session_state.document_texts.pop(source.source_id, None)
                         else:
@@ -463,6 +510,10 @@ def render(store, owner, secret, panels):
                             project.facts = [f for f in project.facts if f.source_id != source.source_id]
                     elif existing_source and project.facts and not facts:
                         raise ValueError("재추출 0건으로 기존 값은 유지했습니다. 새 자료나 원문 확인이 필요합니다.")
+                    if text and facts and not force_refresh and sufficient_primary_coverage(primary):
+                        for entry in project.narrative.get("api_usage", []):
+                            if entry.get("source_id") == source.source_id and entry.get("conflicts"):
+                                entry["superseded_by"] = "후속 원문 재추출"
                     if not existing_source:
                         project.sources.append(source)
                     project.facts.extend(facts)

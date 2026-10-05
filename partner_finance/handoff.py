@@ -24,6 +24,8 @@ def packet_content(project):
     seen_sources = set()
     if project.narrative.get("analysis_route") != "news_only":
         for entry in reversed(project.narrative.get("api_usage", [])):
+            if entry.get("superseded_by"):
+                continue
             source_id = entry.get("source_id")
             if source_id and source_id not in seen_sources:
                 seen_sources.add(source_id)

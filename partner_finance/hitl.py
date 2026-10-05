@@ -5,8 +5,9 @@ import re
 import time
 from .schema import utc_now
 
-MAX_INPUT_BYTES = 1_000_000
-MAX_OUTPUT_TOKENS = 16_000
+# Cost-saving caps are temporarily disabled. Provider/model limits still apply.
+MAX_INPUT_BYTES = None
+MAX_OUTPUT_TOKENS = None
 
 
 def fingerprint(value):
@@ -38,7 +39,7 @@ def preflight(body):
     sensitive = bool(re.search(r"confidential|strictly private|internal only|대외비|사외비|비공개|주민등록|비밀번호|password\s*[:=]", raw, re.I))
     # Deliberately conservative heuristic, not a tokenizer or billing upper bound.
     tokens = len(raw.encode("utf-8"))
-    output = int(body.get("max_output_tokens", 5000))
+    output = body.get("max_output_tokens", body.get("max_tokens"))
     tools = bool(body.get("tools"))
     bounded_search = (type(body.get("max_tool_calls")) is int and 0 < body["max_tool_calls"] <= 3
                       and tools and all(t.get("type") == "web_search" and
@@ -48,7 +49,8 @@ def preflight(body):
             "output_limit": output, "estimated_text_usd": cost, "web_tools": tools,
             "input_bytes": tokens, "high_volume": tokens > 20000 or (tools and not bounded_search),
             "bounded_search": bounded_search,
-            "over_limit": tokens > MAX_INPUT_BYTES or output > MAX_OUTPUT_TOKENS,
+            "over_limit": ((MAX_INPUT_BYTES is not None and tokens > MAX_INPUT_BYTES)
+                           or (MAX_OUTPUT_TOKENS is not None and output is not None and output > MAX_OUTPUT_TOKENS)),
             "blocked": blocked, "sensitive": sensitive}
 
 
@@ -63,7 +65,7 @@ def authorize_request(project, body, *, action=None):
     key = project.project_id + ":" + info["hash"]
     tickets = st.session_state.setdefault("hitl_tickets", {})
     if info["over_limit"]:
-        raise ValueError(f"전체 문서 처리 한도 초과: 요청 입력 {MAX_INPUT_BYTES:,}바이트, 출력 {MAX_OUTPUT_TOKENS:,}토큰 한도입니다. 일부 페이지를 몰래 제외하거나 자동 분할 호출하지 않습니다.")
+        raise ValueError("앱에 설정된 처리 한도를 초과했습니다. 일부 페이지를 자동 제외하지 않습니다.")
     if info["blocked"]:
         raise ValueError("보안 차단: 인증정보 의심 문자열이 있습니다. 원문에서 제거한 뒤 다시 검사하십시오. 승인으로 우회할 수 없습니다.")
     if info["sensitive"]:
@@ -93,10 +95,13 @@ def render_hitl(project, persist, *, include_fact_review=True, show_review=True,
         if info["high_volume"]:
             st.info("문서 전체를 분석하므로 처리시간과 비용이 늘어날 수 있습니다. 실행 후 결과 화면으로 자동 이동합니다." if finance_flow
                     else "입력이 크거나 검색 범위가 큽니다. 비용을 줄이려면 취소 후 필요한 페이지·범위만 선택하세요.")
+        if finance_flow and info["output_limit"] is None:
+            st.caption("보고서 전체 전송, 앱의 입력량·출력 토큰 절약 제한 해제. 모델 자체 처리량과 계정 사용 한도는 적용됩니다. 비용이 커질 수 있습니다.")
         if info["blocked"] or info["sensitive"] or info["over_limit"]:
             st.error("보안 또는 처리 한도로 실행할 수 없습니다. 자료를 제거하거나 범위를 줄여 다시 준비하세요. 승인으로 우회할 수 없습니다.")
         with st.expander("전송 내용·모델·처리 한도 보기"):
-            st.write(f"개인 OpenAI API / {info['model']} / 입력 {info['input_bytes']:,}바이트 / 출력 최대 {info['output_limit']:,}토큰")
+            output_label = f"최대 {info['output_limit']:,}토큰" if info["output_limit"] is not None else "앱 상한 없음 (모델 한도 적용)"
+            st.write(f"개인 OpenAI API / {info['model']} / 입력 {info['input_bytes']:,}바이트 / 출력 {output_label}")
             st.caption("바이트 수는 토큰 수가 아닙니다. 자동 탐지는 보안 승인이나 안전 보증이 아닙니다. 실제 사용량은 처리 후 확인하세요. API 키는 아래에 포함하지 않습니다.")
             st.json(pending["body"])
         volume = st.checkbox("추가 비용 가능성을 확인했으며 이 범위로 진행합니다.", key=prefix + "volume") if info["high_volume"] else True

@@ -22,6 +22,46 @@ def finance_app():
 
 
 class FinanceApprovalUITests(unittest.TestCase):
+    def test_company_input_precedes_compact_saved_selection_and_reuses_company(self):
+        from partner_finance.storage import ProjectStore
+        from partner_finance.schema import AnalysisProject, EntityProfile
+        with tempfile.TemporaryDirectory() as root:
+            store = ProjectStore(root)
+            saved = AnalysisProject("Webuild", EntityProfile("Webuild"))
+            store.save(saved, "test-user")
+            app = AppTest.from_function(finance_app, default_timeout=20)
+            app.session_state.test_root = root
+            app.session_state.project = None
+            app.session_state.document_texts = {}
+            app.run()
+            self.assertFalse(app.exception)
+            self.assertEqual(app.text_input[0].label, "기업명")
+            self.assertFalse(any(s.value == "어느 기업을 살펴볼까요?" for s in app.subheader))
+            selection = next(e for e in app.expander if e.label.startswith("기존 기업에서"))
+            self.assertFalse(selection.proto.expanded)
+            app.text_input[0].set_value("webuild").run()
+            next(b for b in app.button if b.label == "이 기업으로 시작").click().run()
+            self.assertEqual(app.session_state.project.project_id, saved.project_id)
+            self.assertEqual(len(store.list_projects("test-user")), 1)
+
+    def test_over_one_megabyte_reaches_approval_and_sends_full_text_once(self):
+        text = "[PAGE 1] " + "Revenue 100 " * 120000
+        with self.empty_result_app(text=text) as (app, request):
+            self.assertFalse(app.exception)
+            self.assertFalse(app.error)
+            self.assertGreater(app.session_state.hitl_pending["info"]["input_bytes"], 1000000)
+            self.assertNotIn("max_output_tokens", app.session_state.hitl_pending["body"])
+            next(c for c in app.checkbox if "추가 비용 가능성" in c.label).check().run()
+            with patch("partner_finance.ingest.parse_uploaded_file", side_effect=AssertionError("Do not parse again")):
+                next(b for b in app.button if b.label == "승인하고 전체 분석 시작 (유료)").click().run()
+            self.assertFalse(app.exception)
+            self.assertFalse(app.error)
+            self.assertEqual(request.call_count, 1)
+            body = json.loads(request.call_args.args[0].data)
+            self.assertNotIn("max_output_tokens", body)
+            self.assertEqual(json.loads(body["input"][1]["content"])["document_text"], text)
+            self.assertEqual(request.call_args.kwargs["timeout"], 600)
+
     def test_link_download_is_reused_for_approval_and_source_url_saved(self):
         url = "https://example.com/public.pdf"
         document = {"kind": "document", "url": url, "name": "public.pdf", "type": "application/pdf", "content": b"public report"}

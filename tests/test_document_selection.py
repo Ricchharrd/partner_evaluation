@@ -26,5 +26,7 @@ class DocumentSelectionTests(unittest.TestCase):
     def test_full_report_output_budget_and_security(self):
         body = {"input": "x" * 300000, "max_output_tokens": 16000}
         self.assertFalse(preflight(body)["over_limit"])
-        self.assertTrue(preflight({**body, "input": "x" * 1000001})["over_limit"])
+        self.assertFalse(preflight({**body, "input": "x" * 2000001})["over_limit"])
+        self.assertFalse(preflight({"input": "x" * 2000001})["over_limit"])
+        self.assertIsNone(preflight({"input": "report"})["output_limit"])
         self.assertTrue(preflight({**body, "input": "internal only"})["sensitive"])

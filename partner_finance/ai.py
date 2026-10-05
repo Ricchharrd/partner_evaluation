@@ -165,13 +165,15 @@ APM 또는 회사 정의 현금흐름을 정식 재무제표의 영업/투자/�
     cache_key = hashlib.sha256(json.dumps({"text_hash": hashlib.sha256(text.encode()).hexdigest(),
         "payload": payload, "system": system, "selection": SELECTION_VERSION,
         "provider": getattr(provider, "name", ""), "model": getattr(provider, "model", ""),
-        "entity": entity_id, "source": source.source_id}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        "entity": entity_id, "source": source.source_id,
+        "output_mode": "provider-default" if getattr(provider, "supports_unbounded_output", False) else "16000"}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     cached = cache.get(cache_key) if cache is not None and not force_refresh else None
     if cached:
         result, meta = deepcopy(cached["result"]), deepcopy(cached["meta"])
         meta.update(cache_hit=True, original_usage=meta.get("usage", {}), usage={})
     else:
-        result, meta = provider.generate_json(system, payload, max_tokens=16000)
+        result, meta = provider.generate_json(system, payload,
+            max_tokens=None if getattr(provider, "supports_unbounded_output", False) else 16000)
         meta = {**meta, "cache_hit": False}
     meta.update(original_characters=len(text), selected_characters=len(clipped_text), selection_version=SELECTION_VERSION)
     raw_result = deepcopy(result)

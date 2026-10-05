@@ -1,4 +1,5 @@
 from datetime import date
+from copy import deepcopy
 from types import SimpleNamespace
 import streamlit as st
 
@@ -9,7 +10,7 @@ from .workflow import recalculate, is_current, log_action, filter_interim_compar
 from .dashboard import assessment, portfolio
 from .reports import build_word, build_excel
 from .research import research_company_openai
-from .market_news import has_saved_news
+from .market_news import has_saved_news, normalized_company_name
 from .openai_provider import OpenAIProvider, DEFAULT_OPENAI_MODEL
 from .handoff import build_handoff, packet_content, build_claude_start
 from .public_gpt import build_public_gpt_packet
@@ -18,7 +19,7 @@ from .hitl import (authorize_request, render_hitl, render_evidence_review, curre
                    clear_action_tickets, quick_review_blocker, record_quick_review, fingerprint)
 
 
-FINANCE_UI_VERSION = 7
+FINANCE_UI_VERSION = 8
 STEPS = ["1. 자료 준비", "2. 결과 확인", "3. 사내 전달"]
 
 
@@ -79,19 +80,7 @@ def render(store, owner, secret, panels):
 
     project = st.session_state.project
     if project is None:
-        st.subheader("어느 기업을 살펴볼까요?")
         saved = store.list_projects(owner)
-        if saved:
-            st.caption("등록된 회사를 고르면 바로 이어서 분석할 수 있습니다.")
-            for row in saved:
-                c1, c2 = st.columns([4, 1])
-                c1.write(f"**{row['legal_name']}** · {row['status']}")
-                saved_project = store.load(row["project_id"], owner)
-                label = "결과 보기" if saved_project.facts or saved_project.narrative.get("research_briefs") else "분석하기"
-                if c2.button(label, key=f"open_{row['project_id']}", width="stretch"):
-                    st.session_state.project = saved_project
-                    st.rerun()
-        st.write("목록에 없다면 기업명 하나로 시작하세요. SEC·DART 조회는 필요한 경우에만 사용합니다.")
         with st.form("quick_search"):
             query = st.text_input("기업명", placeholder="예: Acciona, Webuild")
             direct = st.form_submit_button("이 기업으로 시작", type="primary")
@@ -102,9 +91,19 @@ def render(store, owner, secret, panels):
             if not query.strip():
                 st.error("기업명을 입력해 주세요.")
             else:
-                st.session_state.project = AnalysisProject(f"{query.strip()} 평가", EntityProfile(query.strip()))
+                match = next((r for r in saved if normalized_company_name(r["legal_name"]) == normalized_company_name(query)), None)
+                st.session_state.project = (store.load(match["project_id"], owner) if match else
+                    AnalysisProject(f"{query.strip()} 평가", EntityProfile(query.strip())))
                 persist()
                 st.rerun()
+        if saved:
+            with st.expander(f"기존 기업에서 이어서 보기 ({len(saved)}개)"):
+                by_id = {r["project_id"]: r for r in saved}
+                chosen = st.selectbox("저장된 기업", list(by_id),
+                    format_func=lambda pid: f"{by_id[pid]['legal_name']} / {by_id[pid]['status']}")
+                if st.button("선택한 기업 열기"):
+                    st.session_state.project = store.load(chosen, owner)
+                    st.rerun()
         if submitted:
             st.session_state.pop("simple_matches", None)
             try:
@@ -399,10 +398,14 @@ def render(store, owner, secret, panels):
                         source.url = document_url
                         source.source_type = "공개 링크"
                         source.note = "외부 공개 원문을 서버에서 직접 수집. 입력 주소: " + requested_url
-                    facts, warnings, text = parse_uploaded_file(upload.name, upload.getvalue(), project.entity.entity_id, source)
+                    prepared = st.session_state[context_key]
+                    if "parsed" not in prepared:
+                        prepared["parsed"] = parse_uploaded_file(upload.name, upload.getvalue(), project.entity.entity_id, source)
+                    # Approval reruns the script; reuse the exact prepared text instead of rereading a long PDF.
+                    facts, warnings, text = deepcopy(prepared["parsed"])
                     if text:
                         st.write("AI 재무수치 추출, 요청 승인 확인")
-                        provider = OpenAIProvider(secret("OPENAI_API_KEY"), secret("OPENAI_MODEL", DEFAULT_OPENAI_MODEL), approval=lambda body: authorize_request(project, body, action="upload"))
+                        provider = OpenAIProvider(secret("OPENAI_API_KEY"), secret("OPENAI_MODEL", DEFAULT_OPENAI_MODEL), timeout=600, approval=lambda body: authorize_request(project, body, action="upload"))
                         if provider.available:
                             facts, ai_warnings, meta = extract_facts_from_text(text, project.entity.entity_id, source, provider,
                                 default_scope=project.entity.reporting_scope,

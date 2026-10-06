@@ -118,6 +118,12 @@ class ProjectStore:
             connection.execute('DELETE FROM news_refresh WHERE project_id=? AND owner_id=? AND attempted_at=?',
                                (project_id, owner_id, attempted_at))
 
+    def release_failed_news_refresh_before(self, project_id, owner_id, before):
+        """Reopen a legacy failed parse without clearing a newer concurrent attempt."""
+        with self._connect() as connection:
+            connection.execute('DELETE FROM news_refresh WHERE project_id=? AND owner_id=? AND attempted_at<=?',
+                               (project_id, owner_id, before))
+
     def load(self, project_id: str, owner_id: str = "local-user") -> AnalysisProject:
         with self._connect() as connection:
             row = connection.execute("SELECT payload_json FROM projects WHERE project_id=? AND owner_id=?", (project_id, owner_id)).fetchone()

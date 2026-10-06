@@ -57,6 +57,24 @@ class NewsDashboardTests(unittest.TestCase):
             self.assertFalse(app.exception)
             self.assertTrue(any(s.value == 'Ferrovial 소식, 0건' for s in app.subheader))
 
+    def test_old_source_match_failure_can_be_retried_once(self):
+        from partner_finance.market_news import add_company
+        with tempfile.TemporaryDirectory() as root:
+            store = ProjectStore(root)
+            project = add_company(store, 'test-user', 'Ferrovial')
+            store.claim_news_refresh(project.project_id, 'test-user')
+            project.narrative['market_last_error'] = {
+                'message': '검색은 끝났지만 출처 URL과 최근 90일 날짜 조건을 충족한 기사가 없습니다.'}
+            store.save(project, 'test-user')
+            app = AppTest.from_function(connected_dashboard_app, default_timeout=20)
+            app.session_state.test_root = root
+            app.session_state.market_company = project.project_id
+            app.run()
+            self.assertFalse(app.exception)
+            self.assertEqual(store.news_refresh_remaining(project.project_id, 'test-user'), 0)
+            self.assertFalse(next(b for b in app.button if b.label == '최신 뉴스 가져오기 (유료)').disabled)
+            self.assertTrue(store.load(project.project_id, 'test-user').narrative['market_url_retry_unlocked'])
+
     def test_update_requires_consent_then_saves_and_displays_new_article(self):
         url = 'https://www.webuildgroup.com/en/media/press-releases/test-public-news/'
         payload = {'status': 'completed', 'output': [

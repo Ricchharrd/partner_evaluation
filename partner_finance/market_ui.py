@@ -1,5 +1,6 @@
 """Read-first company intelligence; finance remains an optional drill-down."""
 from datetime import date, timedelta
+from datetime import datetime
 from copy import deepcopy
 from html import escape
 import streamlit as st
@@ -150,6 +151,14 @@ def render_market(store, owner, secret, *, management=False, can_input=True):
     pending = st.session_state.get("hitl_pending")
     if pending and (not selected or pending["project_id"] != selected.project_id):
         st.session_state.pop("hitl_pending", None)
+    if selected:
+        failure = selected.narrative.get("market_last_error", {})
+        legacy_url_failure = "출처 URL과 최근 90일 날짜 조건" in failure.get("message", "")
+        if legacy_url_failure and not selected.narrative.get("market_url_retry_unlocked"):
+            store.release_failed_news_refresh_before(
+                selected.project_id, owner, datetime.fromisoformat(selected.updated_at).timestamp() + 1)
+            selected.narrative["market_url_retry_unlocked"] = True
+            store.save(selected, owner)
     has_packet = bool(selected and selected.narrative.get("research_briefs"))
     remaining = store.news_refresh_remaining(selected.project_id, owner) if selected else 0
     run = False

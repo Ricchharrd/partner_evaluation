@@ -97,5 +97,7 @@ generic placeholder message. Explicit request rejections (HTTP 400/401/403/404/4
 release only that attempt's cooldown. Completed requests and uncertain network
 failures keep the one-hour cooldown to avoid repeated charges. No automatic paid
 retry is made. API error bodies and credentials are never displayed.
+Projects blocked by the former exact-URL parsing error receive one retry after
+the parser fix. The user still approves that new paid request.
 
 API reference: https://developers.openai.com/api/docs/guides/tools-web-search

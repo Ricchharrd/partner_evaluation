@@ -41,7 +41,21 @@ class NewsDashboardTests(unittest.TestCase):
             app.run()
             self.assertFalse(app.exception)
             self.assertEqual(app.metric[0].value, '3개')
-            self.assertEqual(sum('Webuild · EPC' in option for option in app.pills[0].options), 1)
+            selector = next(box for box in app.selectbox if box.label == '기업 선택')
+            self.assertEqual(sum('Webuild · EPC' in option for option in selector.options), 1)
+
+    def test_second_company_card_opens_its_own_news(self):
+        from partner_finance.market_news import add_company
+        with tempfile.TemporaryDirectory() as root:
+            store = ProjectStore(root)
+            ensure_featured_companies(store, 'test-user')
+            project = add_company(store, 'test-user', 'Ferrovial')
+            app = AppTest.from_function(dashboard_app, default_timeout=20)
+            app.session_state.test_root = root
+            app.run()
+            next(b for b in app.button if b.key == f'open_company_{project.project_id}').click().run()
+            self.assertFalse(app.exception)
+            self.assertTrue(any(s.value == 'Ferrovial 소식, 0건' for s in app.subheader))
 
     def test_update_requires_consent_then_saves_and_displays_new_article(self):
         url = 'https://www.webuildgroup.com/en/media/press-releases/test-public-news/'

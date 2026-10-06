@@ -119,7 +119,7 @@ def render_market(store, owner, secret, *, management=False, can_input=True):
     st.caption("공식 발표를 선별한 초기 뉴스가 포함됩니다. 실시간 전체 뉴스가 아니며, 열람과 필터 변경에는 AI 비용이 들지 않습니다.")
     if st.session_state.get("market_company") not in ["all", *by_id]:
         st.session_state.market_company = "all"
-    chosen = st.pills("기업 선택", ["all", *by_id], key="market_company",
+    chosen = st.selectbox("기업 선택", ["all", *by_id], key="market_company",
                           format_func=lambda key: "전체 기업" if key == "all" else
                           f"{by_id[key].entity.legal_name} · {'·'.join(company_roles(by_id[key])) or '역할 미확인'}")
     selected = by_id.get(chosen)

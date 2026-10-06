@@ -10,7 +10,7 @@ HOT_MODULES = (
     "periods", "document_selection", "hitl", "openai_provider",
     "primary_statements", "ai", "ingest", "finance_batch", "primary_repair",
     "public_documents", "validation", "analysis", "workflow", "report_workpaper",
-    "reports", "handoff", "research", "storage", "market_news", "public_gpt", "dashboard",
+    "reports", "handoff", "research", "storage", "market_news", "company_lookup", "public_gpt", "dashboard",
     "simple_ui", "market_ui",
 )
 _lock = RLock()

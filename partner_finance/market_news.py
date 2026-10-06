@@ -8,7 +8,7 @@ import unicodedata
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
-from .hitl import authorize_request
+from .hitl import preflight
 from .openai_provider import APIRequestError, OpenAIProvider, response_text
 from .schema import AnalysisProject, EntityProfile, utc_now
 from .workflow import log_action
@@ -85,7 +85,7 @@ def news_json(raw):
         if isinstance(value, dict) and isinstance(value.get('articles'), list):
             candidates.append(value)
     if len(candidates) != 1:
-        raise NewsUpdateError('검색 응답을 뉴스 목록으로 읽지 못했습니다. 기존 뉴스는 유지했습니다. 다시 실행하려면 새로운 유료 요청 승인이 필요합니다.')
+        raise NewsUpdateError('검색 응답을 뉴스 목록으로 읽지 못했습니다. 기존 뉴스는 유지했습니다. 재시도에는 새로운 유료 검색 요청이 필요합니다.')
     return candidates[0]
 
 
@@ -168,11 +168,12 @@ def parse_news(payload, today=None):
 
 def saved_articles(project):
     by_url = {}
+    removed = set(project.narrative.get("market_removed_news", []))
     for brief in project.narrative.get("research_briefs", []):
         if not reusable_news_brief(project, brief):
             continue
         for row in brief.get("articles", []):
-            if safe_source(row.get("source_url")):
+            if safe_source(row.get("source_url")) and source_key(row["source_url"]) not in removed:
                 by_url[source_key(row["source_url"])] = {**row,
                                                "source_verified": (row.get("source_verified") is not False
                                                                    and article_specific_source(row["source_url"])),
@@ -188,12 +189,12 @@ def reusable_news_brief(project, brief):
 
 
 def has_saved_news(project):
-    return any(reusable_news_brief(project, brief) for brief in project.narrative.get("research_briefs", []))
+    return bool(saved_articles(project))
 
 
 def normalized_company_name(name):
     plain = unicodedata.normalize("NFKD", " ".join(name.split()))
-    return "".join(char for char in plain if not unicodedata.combining(char)).casefold()
+    return "".join(char for char in plain if char.isalnum() and not unicodedata.combining(char)).casefold()
 
 
 def featured_company(name):
@@ -213,7 +214,7 @@ def company_roles(project):
 def ensure_featured_companies(store, owner):
     seed = json.loads(Path(__file__).with_name("public_news_seed.json").read_text(encoding="utf-8"))
     for profile in FEATURED_COMPANIES:
-        project = add_company(store, owner, profile["name"])
+        project = add_company(store, owner, profile["name"], auto_seed=True)
         if add_public_news_seed(project, seed):
             store.save(project, owner)
 
@@ -225,10 +226,12 @@ def add_public_news_seed(project, seed):
         return False
     briefs = project.narrative.setdefault("research_briefs", [])
     known = {a.get("source_url") for b in briefs for a in b.get("articles", [])}
+    removed = set(project.narrative.get("market_removed_news", []))
     articles = [{**row, "id": hashlib.sha256(row["source_url"].encode()).hexdigest()[:24],
                  "source_type": "기업 공식 발표", "curated": True}
                 for row in seed["companies"].get(profile["name"], [])
-                if row["source_url"] not in known and safe_source(row["source_url"])]
+                if row["source_url"] not in known and safe_source(row["source_url"])
+                and source_key(row["source_url"]) not in removed]
     if articles:
         briefs.insert(0, {
             "id": seed["version"], "kind": NEWS_VERSION, "articles": articles,
@@ -245,7 +248,7 @@ def add_public_news_seed(project, seed):
     return True
 
 
-def add_company(store, owner, name):
+def add_company(store, owner, name, *, auto_seed=False):
     name = " ".join(name.split())
     if not name or len(name) > 120:
         raise ValueError("공개 기업명을 120자 이내로 입력해 주세요.")
@@ -259,8 +262,11 @@ def add_company(store, owner, name):
             break
     else:
         project = AnalysisProject(f"{identity} 평가", EntityProfile(identity))
-    changed = not project.narrative.get("market_watch")
-    project.narrative["market_watch"] = True
+    removed = project.narrative.get("market_removed")
+    changed = not project.narrative.get("market_watch") and not (auto_seed and removed)
+    if not auto_seed or not removed:
+        project.narrative["market_watch"] = True
+        project.narrative.pop("market_removed", None)
     if profile:
         roles = list(profile["roles"])
         current = project.narrative.get("market_roles")
@@ -273,6 +279,43 @@ def add_company(store, owner, name):
     return project
 
 
+def remove_company(store, owner, project):
+    """Unwatch every duplicate project for this company without deleting its analysis."""
+    identity = normalized_company_name(project.entity.legal_name)
+    profile = featured_company(project.entity.legal_name)
+    for row in store.list_projects(owner):
+        match = normalized_company_name(row["legal_name"]) == identity
+        candidate = featured_company(row["legal_name"])
+        if match or (profile and candidate and candidate["name"] == profile["name"]):
+            item = store.load(row["project_id"], owner)
+            item.narrative["market_watch"] = False
+            item.narrative["market_removed"] = True
+            store.save(item, owner)
+
+
+def remove_news_article(project, store, owner, article):
+    """Remove a source from stored briefs and exports, including older duplicates."""
+    key = source_key(article.get("source_url"))
+    if not key:
+        raise ValueError("삭제할 기사 출처를 확인할 수 없습니다.")
+    removed = project.narrative.setdefault("market_removed_news", [])
+    if key not in removed:
+        removed.append(key)
+    for brief in project.narrative.get("research_briefs", []):
+        if brief.get("kind") != NEWS_VERSION:
+            continue
+        keep = [index for index, row in enumerate(brief.get("articles", []))
+                if source_key(row.get("source_url")) != key]
+        brief["articles"] = [brief["articles"][index] for index in keep]
+        brief["sections"] = [brief["sections"][index] for index in keep
+                             if index < len(brief.get("sections", []))]
+    project.narrative["research_briefs"] = [brief for brief in project.narrative.get("research_briefs", [])
+                                            if brief.get("kind") != NEWS_VERSION or brief.get("articles")]
+    project.narrative.pop("final", None)
+    log_action(project, "저장 뉴스 제거", f"기사 출처 제외: {key}")
+    store.save(project, owner)
+
+
 def collect_news(project, store, owner, api_key, model):
     if not api_key or not api_key.strip():
         raise NewsUpdateError('뉴스 검색 API 키가 없습니다. 배포 설정의 OPENAI_API_KEY를 등록해야 새 뉴스를 수집할 수 있습니다.')
@@ -281,11 +324,15 @@ def collect_news(project, store, owner, api_key, model):
 
     def approve(body):
         nonlocal claimed_at
-        authorize_request(project, body, action="market_news")
+        info = preflight(body)
+        if info["blocked"] or info["sensitive"] or info["over_limit"]:
+            raise ValueError("공개 뉴스 검색 요청에 보안상 전송할 수 없는 정보가 포함되어 있습니다.")
         attempt = time.time()
         if not store.claim_news_refresh(project.project_id, owner, REFRESH_SECONDS, now=attempt):
             raise ValueError("최근 업데이트를 실행했습니다. 기업별로 1시간 뒤 다시 시도할 수 있습니다.")
         claimed_at = attempt
+        project.narrative.setdefault("hitl_call_log", []).append({**info, "at": utc_now(),
+            "status": "뉴스 버튼 직접 실행", "action": "market_news"})
 
     provider = OpenAIProvider(api_key, model, timeout=180, approval=approve)
     try:
@@ -297,6 +344,8 @@ def collect_news(project, store, owner, api_key, model):
             "tool_choice": "required", "include": ["web_search_call.action.sources"],
             "max_tool_calls": 3, "max_output_tokens": 6000})
         articles, role_evidence = parsed_news(payload)
+        removed = set(project.narrative.get("market_removed_news", []))
+        articles = [row for row in articles if source_key(row["source_url"]) not in removed]
     except APIRequestError as exc:
         if claimed_at is not None and exc.http_status in {400, 401, 403, 404, 422}:
             store.release_rejected_news_refresh(project.project_id, owner, claimed_at)

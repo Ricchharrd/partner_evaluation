@@ -7,9 +7,9 @@ import streamlit as st
 
 from .market_news import (TOPICS, FEATURED_COMPANIES, NewsUpdateError, add_company, collect_news,
                           company_roles, ensure_featured_companies, featured_company,
-                          normalized_company_name, saved_articles)
+                          normalized_company_name, remove_company, remove_news_article, saved_articles)
+from .company_lookup import CompanyLookupError, lookup_companies
 from .openai_provider import DEFAULT_OPENAI_MODEL
-from .hitl import render_hitl, clear_action_tickets
 from .handoff import build_claude_start
 from .public_gpt import build_public_gpt_packet
 
@@ -49,19 +49,44 @@ def company_identity(project, topic=None, *, card=False):
 
 
 def company_registration(store, owner, can_input):
-    st.caption("공개 기업명만 등록하세요. 기업 추가와 저장된 뉴스 열람에는 AI 비용이 들지 않습니다.")
+    st.caption("기업명을 검색해 공개 기업정보의 후보에서 선택하세요. 검색과 저장 뉴스 열람에는 AI 비용이 들지 않습니다.")
     if not can_input:
         st.info("기업을 추가하려면 왼쪽 메뉴에서 공개자료 이용 안내를 확인해 주세요.")
     with st.form("market_add"):
         name = st.text_input("기업명", placeholder="예: Acciona, Webuild", max_chars=120, disabled=not can_input)
-        add = st.form_submit_button("관심 기업에 추가", type="primary", disabled=not can_input)
-    if add and can_input:
+        search = st.form_submit_button("기업 찾기", type="primary", disabled=not can_input)
+    if search and can_input:
         try:
-            p = add_company(store, owner, name)
-            st.session_state.market_company = p.project_id
-            st.rerun()
-        except ValueError as exc:
+            st.session_state.market_company_candidates = lookup_companies(name)
+            st.session_state.market_company_query = name.strip()
+        except CompanyLookupError as exc:
+            st.session_state.market_company_candidates = []
             st.error(str(exc))
+    candidates = st.session_state.get("market_company_candidates", [])
+    if candidates:
+        st.caption(f"'{st.session_state.get('market_company_query', '')}' 검색 결과입니다. 설명과 원본 항목을 확인하고 해당 기업을 고르세요. 공개 DB 정보는 법인등기 확인을 대신하지 않습니다.")
+        selected_id = st.radio("기업 후보", [row["id"] for row in candidates],
+                               format_func=lambda key: next(
+                                   f"{row['name']} · {row['description'] or '설명 없음'}"
+                                   for row in candidates if row["id"] == key))
+        candidate = next(row for row in candidates if row["id"] == selected_id)
+        st.link_button("기업정보 원본 보기", candidate["source"])
+        if candidate["website"]:
+            st.caption("공식 웹사이트 등록값: " + candidate["website"])
+        if st.button("선택한 기업 추가", type="primary", disabled=not can_input):
+            try:
+                project = add_company(store, owner, candidate["name"])
+                project.narrative["market_identity"] = {"source": candidate["source"],
+                    "searched_as": st.session_state.get("market_company_query", ""),
+                    "label": candidate["label"], "website": candidate["website"]}
+                store.save(project, owner)
+                st.session_state.pop("market_company_candidates", None)
+                st.session_state.market_company = project.project_id
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
+    elif search and can_input:
+        st.info("일치하는 기업 후보가 없습니다. 정식 영문명이나 다른 표기로 다시 검색해 주세요.")
 
 
 def render_market(store, owner, secret, *, management=False, can_input=True):
@@ -94,6 +119,11 @@ def render_market(store, owner, secret, *, management=False, can_input=True):
                 with st.container(border=True):
                     st.markdown(company_identity(p), unsafe_allow_html=True)
                     st.caption(f"저장 뉴스 {len(saved_articles(p))}건")
+                    if st.button("관심 기업에서 제거", key=f"unwatch_{p.project_id}"):
+                        remove_company(store, owner, p)
+                        st.session_state.pop("market_company_candidates", None)
+                        st.session_state.market_company = "all"
+                        st.rerun()
         return
     st.title("대시보드")
     st.caption("회사 소식부터 살펴보고, 필요한 기업만 재무 상세분석으로 이어가세요.")
@@ -148,9 +178,6 @@ def render_market(store, owner, secret, *, management=False, can_input=True):
                               on_click=show_company, args=(project.project_id,), width="stretch")
                     st.button("재무 상세분석", key=f"finance_company_{project.project_id}",
                               on_click=open_financials, args=(project,), width="stretch", disabled=not can_input)
-    pending = st.session_state.get("hitl_pending")
-    if pending and (not selected or pending["project_id"] != selected.project_id):
-        st.session_state.pop("hitl_pending", None)
     if selected:
         failure = selected.narrative.get("market_last_error", {})
         legacy_url_failure = "출처 URL과 최근 90일 날짜 조건" in failure.get("message", "")
@@ -163,16 +190,16 @@ def render_market(store, owner, secret, *, management=False, can_input=True):
     remaining = store.news_refresh_remaining(selected.project_id, owner) if selected else 0
     run = False
     if selected:
+        st.caption("유료 AI 검색입니다. '최신 뉴스 가져오기'를 누르면 바로 실행되어 비용이 발생할 수 있으니 필요한 때만 눌러 주세요.")
         actions = st.columns(2, gap="small")
-        run = actions[0].button("최신 뉴스 가져오기 (유료)", type="primary", width="stretch",
+        run = actions[0].button("최신 뉴스 가져오기", type="primary", width="stretch",
                                 disabled=not can_input or remaining > 0 or not secret("OPENAI_API_KEY"))
         actions[1].button("재무 상세분석", width="stretch", on_click=open_financials,
                           args=(selected,), disabled=not can_input)
         persist = lambda: store.save(selected, owner)
-        approved = render_hitl(selected, persist, show_review=False, allowed_actions=["market_news"]) if can_input else None
         checked = selected.narrative.get("market_last_checked")
         st.caption(f"마지막 AI 검색: {checked[:16].replace('T', ' ')} UTC" if checked else "추가 AI 검색 이력 없음, 아래 저장된 공개 뉴스를 바로 읽을 수 있습니다.")
-        st.caption("뉴스 열람은 무료입니다. 업데이트만 AI 비용이 발생하며, 실행 전 확인합니다.")
+        st.caption("저장된 뉴스 열람은 무료입니다.")
         if remaining:
             st.caption(f"다음 업데이트까지 약 {(remaining + 59) // 60}분. 처리된 요청이나 시간 초과는 반복 과금을 막기 위해 대기시간을 적용합니다.")
         if not secret("OPENAI_API_KEY"):
@@ -182,7 +209,7 @@ def render_market(store, owner, secret, *, management=False, can_input=True):
             st.warning("마지막 업데이트 실패: " + failure["message"])
         if not can_input:
             st.caption("업데이트와 분석은 왼쪽 공개자료 이용 안내 확인 후 사용할 수 있습니다.")
-        if can_input and (run or approved == "market_news"):
+        if can_input and run:
             try:
                 with st.spinner("이 기업의 공개 뉴스와 출처를 수집하고 있습니다..."):
                     articles = collect_news(selected, store, owner, secret("OPENAI_API_KEY"),
@@ -200,8 +227,6 @@ def render_market(store, owner, secret, *, management=False, can_input=True):
                 selected.narrative["market_last_error"] = {"message": "뉴스 처리 또는 저장 중 오류가 발생했습니다. 기존 뉴스는 유지됩니다. 운영자는 서버 로그를 확인해 주세요."}
                 persist()
                 st.error(selected.narrative["market_last_error"]["message"])
-            finally:
-                clear_action_tickets(selected)
         if has_packet:
             news_packet = deepcopy(selected)
             news_packet.narrative["analysis_route"] = "news_only"
@@ -250,7 +275,15 @@ def render_market(store, owner, secret, *, management=False, can_input=True):
             st.caption(f"{article['source_name']}, 발표 {article.get('published_at') or '미확인'}, 수집 {article['collected_at'][:10]}, {article['status']}{source_status}")
             if article.get("curated"):
                 st.caption("기업 공식 발표, 초기 선별 뉴스")
-            st.link_button("원문 보기", article["source_url"])
+            actions = st.columns([1, 1, 4])
+            actions[0].link_button("원문 보기", article["source_url"])
+            if actions[1].button("기사 제거", key=f"remove_article_{p.project_id}_{article['id']}"):
+                remove_news_article(p, store, owner, article)
+                current = st.session_state.get("project")
+                if current and current.project_id == p.project_id:
+                    st.session_state.project = p
+                st.session_state.market_notice = "선택한 기사를 목록과 전달자료에서 제거했습니다."
+                st.rerun()
     if selected and not saved_articles(selected):
         briefs = selected.narrative.get("research_briefs", [])
         if briefs:

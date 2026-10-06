@@ -28,6 +28,14 @@ def connected_dashboard_app():
                   lambda key, default=None: 'test-key' if key == 'OPENAI_API_KEY' else default)
 
 
+def management_app():
+    import streamlit as st
+    from partner_finance.market_ui import render_market
+    from partner_finance.storage import ProjectStore
+    render_market(ProjectStore(st.session_state.test_root), 'test-user',
+                  lambda key, default=None: default, management=True)
+
+
 class NewsDashboardTests(unittest.TestCase):
     def test_duplicate_company_projects_have_one_market_selector(self):
         with tempfile.TemporaryDirectory() as root:
@@ -72,10 +80,10 @@ class NewsDashboardTests(unittest.TestCase):
             app.run()
             self.assertFalse(app.exception)
             self.assertEqual(store.news_refresh_remaining(project.project_id, 'test-user'), 0)
-            self.assertFalse(next(b for b in app.button if b.label == '최신 뉴스 가져오기 (유료)').disabled)
+            self.assertFalse(next(b for b in app.button if b.label == '최신 뉴스 가져오기').disabled)
             self.assertTrue(store.load(project.project_id, 'test-user').narrative['market_url_retry_unlocked'])
 
-    def test_update_requires_consent_then_saves_and_displays_new_article(self):
+    def test_update_runs_once_and_saves_new_article(self):
         url = 'https://www.webuildgroup.com/en/media/press-releases/test-public-news/'
         payload = {'status': 'completed', 'output': [
             {'type': 'web_search_call', 'status': 'completed', 'action': {'sources': [{'url': url}]}},
@@ -90,9 +98,7 @@ class NewsDashboardTests(unittest.TestCase):
             app.session_state.test_root = root
             app.run()
             next(b for b in app.button if b.label == '회사 소식 보기').click().run()
-            next(b for b in app.button if b.label == '최신 뉴스 가져오기 (유료)').click().run()
-            request.assert_not_called()
-            next(b for b in app.button if b.label == '공개자료로 승인하고 실행').click().run()
+            next(b for b in app.button if b.label == '최신 뉴스 가져오기').click().run()
             self.assertFalse(app.exception)
             self.assertFalse(app.error)
             request.assert_called_once()
@@ -102,6 +108,60 @@ class NewsDashboardTests(unittest.TestCase):
             saved = store.load(webuild['project_id'], 'test-user')
             self.assertEqual(len(saved_articles(saved)), 3)
             self.assertEqual(saved.narrative['market_last_count'], 1)
+            self.assertEqual(saved.narrative['hitl_call_log'][-1]['status'], '뉴스 버튼 직접 실행')
+
+    def test_remove_article_removes_it_from_feed_and_exports(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = ProjectStore(root)
+            ensure_featured_companies(store, 'test-user')
+            webuild = next(row for row in store.list_projects('test-user') if row['legal_name'] == 'Webuild')
+            app = AppTest.from_function(dashboard_app, default_timeout=20)
+            app.session_state.test_root = root
+            app.session_state.market_company = webuild['project_id']
+            app.run()
+            article = saved_articles(store.load(webuild['project_id'], 'test-user'))[0]
+            next(b for b in app.button if b.key == f"remove_article_{webuild['project_id']}_{article['id']}").click().run()
+            self.assertFalse(app.exception)
+            project = store.load(webuild['project_id'], 'test-user')
+            self.assertEqual(len(saved_articles(project)), 1)
+            self.assertNotIn(article['source_url'], build_public_gpt_packet(project).decode())
+            from partner_finance.handoff import packet_content
+            project.narrative['analysis_route'] = 'news_only'
+            _, evidence = packet_content(project)
+            self.assertNotIn(article['source_url'], evidence.decode())
+            ensure_featured_companies(store, 'test-user')
+            self.assertEqual(len(saved_articles(store.load(webuild['project_id'], 'test-user'))), 1)
+
+    def test_unwatch_featured_company_does_not_reappear(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = ProjectStore(root)
+            app = AppTest.from_function(management_app, default_timeout=20)
+            app.session_state.test_root = root
+            app.run()
+            webuild = next(row for row in store.list_projects('test-user') if row['legal_name'] == 'Webuild')
+            next(b for b in app.button if b.key == f"unwatch_{webuild['project_id']}").click().run()
+            self.assertFalse(app.exception)
+            self.assertEqual(len([b for b in app.button if b.label == '관심 기업에서 제거']), 2)
+            ensure_featured_companies(store, 'test-user')
+            self.assertFalse(store.load(webuild['project_id'], 'test-user').narrative['market_watch'])
+
+    def test_search_candidate_then_adds_selected_public_name(self):
+        candidates = [{'id': 'Q15557', 'name': 'Ferrovial SE', 'label': 'Ferrovial',
+                       'description': 'Spanish construction company', 'website': 'https://www.ferrovial.com/',
+                       'source': 'https://www.wikidata.org/wiki/Q15557'}]
+        with tempfile.TemporaryDirectory() as root, patch('partner_finance.market_ui.lookup_companies', return_value=candidates) as lookup:
+            app = AppTest.from_function(management_app, default_timeout=20)
+            app.session_state.test_root = root
+            app.run()
+            next(t for t in app.text_input if t.label == '기업명').set_value('Ferrovial')
+            next(b for b in app.button if b.label == '기업 찾기').click().run()
+            lookup.assert_called_once_with('Ferrovial')
+            self.assertTrue(any(r.label == '기업 후보' for r in app.radio))
+            next(b for b in app.button if b.label == '선택한 기업 추가').click().run()
+            self.assertFalse(app.exception)
+            project = next(ProjectStore(root).load(r['project_id'], 'test-user')
+                           for r in ProjectStore(root).list_projects('test-user') if r['legal_name'] == 'Ferrovial SE')
+            self.assertEqual(project.narrative['market_identity']['source'], candidates[0]['source'])
 
     def test_seed_is_idempotent_public_and_exportable(self):
         with tempfile.TemporaryDirectory() as root:

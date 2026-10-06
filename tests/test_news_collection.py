@@ -5,7 +5,7 @@ from datetime import date
 from unittest.mock import patch
 
 from partner_finance.market_news import (NewsUpdateError, add_company, article_specific_source, collect_news,
-                                          parse_news, saved_articles)
+                                          normalized_company_name, parse_news, remove_news_article, saved_articles)
 from partner_finance.openai_provider import APIRequestError
 from partner_finance.storage import ProjectStore
 
@@ -31,6 +31,9 @@ def response(*, annotations=True, sources=False, prose=False, articles=None, rol
 
 
 class NewsCollectionTests(unittest.TestCase):
+    def test_company_name_normalization_accepts_official_punctuation(self):
+        self.assertEqual(normalized_company_name('Acciona, S.A.'), normalized_company_name('Acciona S.A.'))
+
     def test_accepts_search_sources_even_without_inline_annotation(self):
         rows = parse_news(response(annotations=False, sources=True, prose=True))
         self.assertEqual(len(rows), 1)
@@ -88,14 +91,14 @@ class NewsCollectionTests(unittest.TestCase):
                 bodies.append(body)
                 return response(annotations=False, sources=True)
 
-            with patch('partner_finance.market_news.authorize_request') as approve, patch(
-                    'partner_finance.market_news.OpenAIProvider.request', request):
+            with patch('partner_finance.market_news.OpenAIProvider.request', request):
                 collect_news(project, store, 'test', 'test-key', 'test-model')
-            approve.assert_called_once()
             self.assertEqual(bodies[0]['tool_choice'], 'required')
             self.assertEqual(bodies[0]['include'], ['web_search_call.action.sources'])
             self.assertEqual(len(saved_articles(store.load(project.project_id, 'test'))), 1)
             self.assertGreater(store.news_refresh_remaining(project.project_id, 'test'), 0)
+            self.assertEqual(store.load(project.project_id, 'test').narrative['hitl_call_log'][-1]['status'],
+                             '뉴스 버튼 직접 실행')
 
     def test_news_refresh_updates_roles_only_with_search_evidence(self):
         roles = [
@@ -111,8 +114,7 @@ class NewsCollectionTests(unittest.TestCase):
                 provider.approval(provider.normalized_body(body))
                 return response(annotations=False, sources=True, roles=roles)
 
-            with patch('partner_finance.market_news.authorize_request'), patch(
-                    'partner_finance.market_news.OpenAIProvider.request', request):
+            with patch('partner_finance.market_news.OpenAIProvider.request', request):
                 collect_news(project, store, 'test', 'test-key', 'test-model')
             saved = store.load(project.project_id, 'test')
             self.assertEqual(saved.narrative['market_roles'], ['EPC'])
@@ -127,8 +129,7 @@ class NewsCollectionTests(unittest.TestCase):
                 provider.approval(provider.normalized_body(body))
                 raise APIRequestError('모델 설정 오류', http_status=400)
 
-            with patch('partner_finance.market_news.authorize_request'), patch(
-                    'partner_finance.market_news.OpenAIProvider.request', request):
+            with patch('partner_finance.market_news.OpenAIProvider.request', request):
                 with self.assertRaisesRegex(NewsUpdateError, '모델 설정'):
                     collect_news(project, store, 'test', 'test-key', 'test-model')
             self.assertEqual(store.news_refresh_remaining(project.project_id, 'test'), 0)
@@ -147,8 +148,7 @@ class NewsCollectionTests(unittest.TestCase):
                 payload['output'][1]['content'][0]['text'] = json.dumps(data)
                 return payload
 
-            with patch('partner_finance.market_news.authorize_request'), patch(
-                    'partner_finance.market_news.OpenAIProvider.request', request):
+            with patch('partner_finance.market_news.OpenAIProvider.request', request):
                 with self.assertRaises(NewsUpdateError):
                     collect_news(project, store, 'test', 'test-key', 'test-model')
             self.assertGreater(store.news_refresh_remaining(project.project_id, 'test'), 0)
@@ -161,6 +161,29 @@ class NewsCollectionTests(unittest.TestCase):
             with self.assertRaisesRegex(NewsUpdateError, 'API 키'):
                 collect_news(project, store, 'test', '', 'test-model')
             self.assertEqual(store.news_refresh_remaining(project.project_id, 'test'), 0)
+
+    def test_removed_article_stays_out_of_later_paid_refresh(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = ProjectStore(root)
+            project = add_company(store, 'test', 'Ferrovial')
+            item = parse_news(response())[0]
+            project.narrative['research_briefs'] = [{
+                'id': 'one', 'kind': 'company-news/1', 'articles': [item],
+                'collected_at': '2026-01-01', 'status': '검토 대기',
+                'identity': {'legal_name': 'Ferrovial', 'country': ''},
+                'sections': [{'text': item['title'], 'citations': []}],
+            }]
+            store.save(project, 'test')
+            remove_news_article(project, store, 'test', item)
+            self.assertFalse(saved_articles(store.load(project.project_id, 'test')))
+
+            def request(provider, body):
+                provider.approval(provider.normalized_body(body))
+                return response()
+
+            with patch('partner_finance.market_news.OpenAIProvider.request', request):
+                self.assertEqual(collect_news(project, store, 'test', 'test-key', 'test-model'), [])
+            self.assertFalse(saved_articles(store.load(project.project_id, 'test')))
 
 
 if __name__ == '__main__':

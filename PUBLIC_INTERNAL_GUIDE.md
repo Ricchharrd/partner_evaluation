@@ -84,8 +84,13 @@ Set `OPENAI_API_KEY` in Streamlit Secrets. Optionally set `OPENAI_NEWS_MODEL` to
 a web-search-capable model available to that API project; otherwise `OPENAI_MODEL`
 is used. Each refresh requires the existing public-data and paid-execution consent.
 The request requires a real search and includes `web_search_call.action.sources`.
-Only source-linked articles passing the date checks are stored; malformed responses
-do not overwrite existing news. A successful empty search is recorded separately.
+Articles with valid HTTPS URLs and dates are retained even when the returned URL
+does not exactly match the search citation. Such articles are visibly marked for
+source review and are not treated as verified citations in the internal handoff.
+The same search can update EPC/investor tags when its search sources directly
+support a role. Malformed responses do not overwrite existing news. A successful
+empty search is recorded separately. Duplicate projects for one company appear
+once in the market dashboard without deleting their stored analyses.
 
 The screen shows sanitized configuration, quota or parsing errors instead of a
 generic placeholder message. Explicit request rejections (HTTP 400/401/403/404/422)

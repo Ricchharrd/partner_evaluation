@@ -14,7 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from partner_finance import runtime as _runtime
-if getattr(_runtime, "RUNTIME_VERSION", 0) < 3:
+if getattr(_runtime, "RUNTIME_VERSION", 0) < 4:
     reload(_runtime)
 _runtime.refresh_finance_modules(_runtime.module_release())
 

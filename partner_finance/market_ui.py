@@ -5,7 +5,8 @@ from html import escape
 import streamlit as st
 
 from .market_news import (TOPICS, FEATURED_COMPANIES, NewsUpdateError, add_company, collect_news,
-                          company_roles, ensure_featured_companies, featured_company, saved_articles)
+                          company_roles, ensure_featured_companies, featured_company,
+                          normalized_company_name, saved_articles)
 from .openai_provider import DEFAULT_OPENAI_MODEL
 from .hitl import render_hitl, clear_action_tickets
 from .handoff import build_claude_start
@@ -72,7 +73,16 @@ def render_market(store, owner, secret, *, management=False, can_input=True):
         return (featured_order.get(profile["name"] if profile else None, len(featured_order)),
                 project.entity.legal_name.casefold())
 
-    watched = sorted((p for p in projects if p.narrative.get("market_watch")), key=watch_order)
+    unique = {}
+    for project in projects:
+        if not project.narrative.get("market_watch"):
+            continue
+        key = normalized_company_name(project.entity.legal_name)
+        current = unique.get(key)
+        if current is None or (len(project.facts), len(saved_articles(project)), project.updated_at) > (
+                len(current.facts), len(saved_articles(current)), current.updated_at):
+            unique[key] = project
+    watched = sorted(unique.values(), key=watch_order)
     if management:
         st.title("관심 기업 관리")
         st.caption("살펴볼 기업을 등록하고, 대시보드에서 뉴스를 확인하세요.")
@@ -116,6 +126,9 @@ def render_market(store, owner, secret, *, management=False, can_input=True):
     if selected:
         st.markdown(company_identity(selected), unsafe_allow_html=True)
         st.caption("공개 사업 설명 기준의 역할 태그입니다. 개별 사업의 계약상 역할은 별도 확인이 필요합니다.")
+        role_evidence = selected.narrative.get("market_roles_evidence", [])
+        if role_evidence:
+            st.link_button("역할 근거 보기", role_evidence[0]["source_url"])
     else:
         st.caption("기업을 선택하면 저장된 뉴스와 다음 작업을 볼 수 있습니다.")
         columns = st.columns(min(len(watched), 3))
@@ -224,7 +237,8 @@ def render_market(store, owner, secret, *, management=False, can_input=True):
             st.markdown(company_identity(p, article["topic"]), unsafe_allow_html=True)
             st.subheader(article["title"])
             st.text(article["summary"])
-            st.caption(f"{article['source_name']}, 발표 {article.get('published_at') or '미확인'}, 수집 {article['collected_at'][:10]}, {article['status']}")
+            source_status = ", 검색 출처 URL 대조 필요" if article.get("source_verified") is False else ""
+            st.caption(f"{article['source_name']}, 발표 {article.get('published_at') or '미확인'}, 수집 {article['collected_at'][:10]}, {article['status']}{source_status}")
             if article.get("curated"):
                 st.caption("기업 공식 발표, 초기 선별 뉴스")
             st.link_button("원문 보기", article["source_url"])

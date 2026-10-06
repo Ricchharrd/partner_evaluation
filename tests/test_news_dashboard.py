@@ -9,6 +9,7 @@ from streamlit.testing.v1 import AppTest
 from partner_finance.market_news import ensure_featured_companies, saved_articles
 from partner_finance.storage import ProjectStore
 from partner_finance.public_gpt import build_public_gpt_packet
+from partner_finance.schema import AnalysisProject, EntityProfile
 
 
 def dashboard_app():
@@ -28,6 +29,20 @@ def connected_dashboard_app():
 
 
 class NewsDashboardTests(unittest.TestCase):
+    def test_duplicate_company_projects_have_one_market_selector(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = ProjectStore(root)
+            ensure_featured_companies(store, 'test-user')
+            duplicate = AnalysisProject('별도 Webuild 분석', EntityProfile('Webuild'))
+            duplicate.narrative['market_watch'] = True
+            store.save(duplicate, 'test-user')
+            app = AppTest.from_function(dashboard_app, default_timeout=20)
+            app.session_state.test_root = root
+            app.run()
+            self.assertFalse(app.exception)
+            self.assertEqual(app.metric[0].value, '3개')
+            self.assertEqual(sum('Webuild · EPC' in option for option in app.pills[0].options), 1)
+
     def test_update_requires_consent_then_saves_and_displays_new_article(self):
         url = 'https://www.webuildgroup.com/en/media/press-releases/test-public-news/'
         payload = {'status': 'completed', 'output': [

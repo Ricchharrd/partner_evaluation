@@ -5,12 +5,12 @@ from pathlib import Path
 import sys
 from threading import RLock
 
-RUNTIME_VERSION = 3
+RUNTIME_VERSION = 4
 HOT_MODULES = (
     "periods", "document_selection", "hitl", "openai_provider",
     "primary_statements", "ai", "ingest", "finance_batch", "primary_repair",
     "public_documents", "validation", "analysis", "workflow", "report_workpaper",
-    "reports", "handoff", "research", "storage", "market_news", "dashboard",
+    "reports", "handoff", "research", "storage", "market_news", "public_gpt", "dashboard",
     "simple_ui", "market_ui",
 )
 _lock = RLock()

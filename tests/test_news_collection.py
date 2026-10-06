@@ -13,13 +13,13 @@ from partner_finance.storage import ProjectStore
 URL = 'https://www.example.com/news/project'
 
 
-def response(*, annotations=True, sources=False, prose=False, articles=None):
+def response(*, annotations=True, sources=False, prose=False, articles=None, roles=None):
     rows = articles if articles is not None else [{
         'title': '신규 사업 발표', 'summary': '회사가 신규 사업 계획을 발표했다.',
         'published_at': date.today().isoformat(), 'source_name': 'Company',
         'source_url': URL, 'topic': '수주 및 사업',
     }]
-    raw = json.dumps({'articles': rows}, ensure_ascii=False)
+    raw = json.dumps({'articles': rows, 'roles': roles or []}, ensure_ascii=False)
     if prose:
         raw = '검색 결과입니다.\n```json\n' + raw + '\n```\n출처를 확인하세요.'
     payload = {'status': 'completed', 'output': [
@@ -39,9 +39,10 @@ class NewsCollectionTests(unittest.TestCase):
     def test_inline_citation_still_works(self):
         self.assertEqual(len(parse_news(response())), 1)
 
-    def test_unknown_url_and_future_date_are_rejected(self):
-        with self.assertRaises(NewsUpdateError):
-            parse_news(response(annotations=False))
+    def test_uncited_public_url_is_retained_for_review_but_future_date_is_rejected(self):
+        rows = parse_news(response(annotations=False))
+        self.assertEqual(len(rows), 1)
+        self.assertFalse(rows[0]['source_verified'])
         payload = response()
         text = json.loads(payload['output'][1]['content'][0]['text'])
         text['articles'][0]['published_at'] = '2099-01-01'
@@ -84,6 +85,27 @@ class NewsCollectionTests(unittest.TestCase):
             self.assertEqual(len(saved_articles(store.load(project.project_id, 'test'))), 1)
             self.assertGreater(store.news_refresh_remaining(project.project_id, 'test'), 0)
 
+    def test_news_refresh_updates_roles_only_with_search_evidence(self):
+        roles = [
+            {'role': 'EPC', 'source_url': URL, 'evidence': '직접 건설을 수행한다고 명시'},
+            {'role': '투자', 'source_url': 'https://unsearched.example/investment',
+             'evidence': '검색되지 않은 투자 주장'},
+        ]
+        with tempfile.TemporaryDirectory() as root:
+            store = ProjectStore(root)
+            project = add_company(store, 'test', 'Ferrovial')
+
+            def request(provider, body):
+                provider.approval(provider.normalized_body(body))
+                return response(annotations=False, sources=True, roles=roles)
+
+            with patch('partner_finance.market_news.authorize_request'), patch(
+                    'partner_finance.market_news.OpenAIProvider.request', request):
+                collect_news(project, store, 'test', 'test-key', 'test-model')
+            saved = store.load(project.project_id, 'test')
+            self.assertEqual(saved.narrative['market_roles'], ['EPC'])
+            self.assertEqual(saved.narrative['market_roles_source'], URL + '?utm_source=search#article')
+
     def test_rejected_api_request_can_be_retried_after_configuration_fix(self):
         with tempfile.TemporaryDirectory() as root:
             store = ProjectStore(root)
@@ -107,7 +129,11 @@ class NewsCollectionTests(unittest.TestCase):
 
             def request(provider, body):
                 provider.approval(provider.normalized_body(body))
-                return response(annotations=False)
+                payload = response(annotations=False)
+                data = json.loads(payload['output'][1]['content'][0]['text'])
+                data['articles'][0]['source_url'] = 'http://unusable.example/news'
+                payload['output'][1]['content'][0]['text'] = json.dumps(data)
+                return payload
 
             with patch('partner_finance.market_news.authorize_request'), patch(
                     'partner_finance.market_news.OpenAIProvider.request', request):

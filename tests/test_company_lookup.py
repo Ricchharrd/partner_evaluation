@@ -28,6 +28,13 @@ class CompanyLookupTests(unittest.TestCase):
         with patch('partner_finance.company_lookup._api', return_value={'search': []}):
             self.assertEqual(lookup_companies('없는기업'), [])
 
+    def test_disambiguation_pages_are_not_company_choices(self):
+        search = {'search': [{'id': 'Q1', 'label': 'Ferrovial',
+                              'description': 'Wikimedia disambiguation page'}]}
+        with patch('partner_finance.company_lookup._api', return_value=search) as api:
+            self.assertEqual(lookup_companies('Ferrovial'), [])
+            api.assert_called_once()
+
 
 if __name__ == '__main__':
     unittest.main()

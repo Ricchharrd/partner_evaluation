@@ -40,7 +40,9 @@ def lookup_companies(name):
     language = "ko" if re.search(r"[가-힣]", query) else "en"
     result = _api({"action": "wbsearchentities", "search": query, "language": language,
                    "type": "item", "limit": 6})
-    candidates = [item for item in result.get("search", []) if re.fullmatch(r"Q\d+", item.get("id", ""))]
+    candidates = [item for item in result.get("search", [])
+                  if re.fullmatch(r"Q\d+", item.get("id", ""))
+                  and "disambiguation" not in item.get("description", "").casefold()]
     if not candidates:
         return []
     details = _api({"action": "wbgetentities", "ids": "|".join(item["id"] for item in candidates),

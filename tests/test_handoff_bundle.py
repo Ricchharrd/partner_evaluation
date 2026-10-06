@@ -6,11 +6,28 @@ import unittest
 from zipfile import ZipFile
 
 from partner_finance.handoff import build_handoff, packet_content
+from partner_finance.market_news import NEWS_VERSION
 from partner_finance.schema import AnalysisProject, EntityProfile, FinancialFact, SourceDocument
 from partner_finance.workflow import recalculate
 
 
 class HandoffBundleTests(unittest.TestCase):
+    def test_company_overview_is_not_exported_as_verified_news_citation(self):
+        project = AnalysisProject('Synthetic review', EntityProfile('Ferrovial'))
+        project.narrative['analysis_route'] = 'news_only'
+        url = 'https://www.ferrovial.com/en/business-lines/construction/'
+        project.narrative['research_briefs'] = [{
+            'kind': NEWS_VERSION, 'status': '검토 대기', 'collected_at': '2026-10-06',
+            'articles': [{'title': 'Example', 'source_url': url, 'source_verified': True}],
+            'sections': [{'text': 'Example', 'citations': [{'title': 'Example', 'url': url}]}],
+        }]
+        brief, raw = packet_content(project)
+        exported = json.loads(raw)['research_briefs'][0]
+        self.assertFalse(exported['articles'][0]['source_verified'])
+        self.assertFalse(exported['sections'][0]['citations'])
+        self.assertIn('개별 기사 원문 URL 확인 필요', brief.decode('utf-8'))
+        self.assertTrue(project.narrative['research_briefs'][0]['sections'][0]['citations'])
+
     def test_direct_raw_packet_has_facts_and_sources_but_no_private_rubric(self):
         entity = EntityProfile("Synthetic Infrastructure Co.")
         project = AnalysisProject("Synthetic review", entity)

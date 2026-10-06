@@ -50,7 +50,7 @@ def build_public_gpt_packet(project) -> bytes:
             f"제목: {_one_line(article['title'], 180)}",
             f"발표일: {_one_line(article.get('published_at') or '미확인', 20)} / 매체: {_one_line(article.get('source_name') or '미확인', 120)}",
             f"AI 요약, 미검토: {_one_line(article['summary'], 500)}",
-            f"검색 출처 URL 대조: {'필요' if article.get('source_verified') is False else '완료 또는 초기 선별 자료'}",
+            f"개별 기사 원문 확인: {'필요' if article.get('source_verified') is False else '확인된 URL 또는 초기 선별 자료'}",
             f"원문: {article['source_url']}",
         ])
     lines.append(f"범위: 최신 저장 뉴스 {len(articles)}건, 최대 8건. 다른 근거는 필요할 때만 추가한다.")

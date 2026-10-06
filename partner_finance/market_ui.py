@@ -246,7 +246,7 @@ def render_market(store, owner, secret, *, management=False, can_input=True):
             st.markdown(company_identity(p, article["topic"]), unsafe_allow_html=True)
             st.subheader(article["title"])
             st.text(article["summary"])
-            source_status = ", 검색 출처 URL 대조 필요" if article.get("source_verified") is False else ""
+            source_status = ", 개별 기사 원문 확인 필요" if article.get("source_verified") is False else ""
             st.caption(f"{article['source_name']}, 발표 {article.get('published_at') or '미확인'}, 수집 {article['collected_at'][:10]}, {article['status']}{source_status}")
             if article.get("curated"):
                 st.caption("기업 공식 발표, 초기 선별 뉴스")

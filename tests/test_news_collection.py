@@ -4,7 +4,7 @@ import unittest
 from datetime import date
 from unittest.mock import patch
 
-from partner_finance.market_news import (NewsUpdateError, add_company, collect_news,
+from partner_finance.market_news import (NewsUpdateError, add_company, article_specific_source, collect_news,
                                           parse_news, saved_articles)
 from partner_finance.openai_provider import APIRequestError
 from partner_finance.storage import ProjectStore
@@ -38,6 +38,18 @@ class NewsCollectionTests(unittest.TestCase):
 
     def test_inline_citation_still_works(self):
         self.assertEqual(len(parse_news(response())), 1)
+
+    def test_company_overview_is_not_marked_as_a_verified_article(self):
+        overview = 'https://www.ferrovial.com/en/business-lines/construction/'
+        self.assertFalse(article_specific_source(overview))
+        self.assertFalse(article_specific_source('https://www.ferrovial.com/en/'))
+        self.assertTrue(article_specific_source(URL))
+        payload = response()
+        data = json.loads(payload['output'][1]['content'][0]['text'])
+        data['articles'][0]['source_url'] = overview
+        payload['output'][1]['content'][0]['text'] = json.dumps(data)
+        payload['output'][1]['content'][0]['annotations'][0]['url'] = overview
+        self.assertFalse(parse_news(payload)[0]['source_verified'])
 
     def test_uncited_public_url_is_retained_for_review_but_future_date_is_rejected(self):
         rows = parse_news(response(annotations=False))

@@ -18,6 +18,7 @@ PROMPT = "사내 Claude Enterprise의 파트너 재무검토 스킬로 이 공�
 
 def packet_content(project):
     from .hitl import current_review
+    from .market_news import NEWS_VERSION, article_specific_source
     reviewed = current_review(project)
     review_record = deepcopy(project.narrative.get("hitl_review", {}))
     conflicts = []
@@ -75,7 +76,19 @@ def packet_content(project):
         if r.fiscal_year in years:
             brief.append(f"{period_label(project.facts, r.fiscal_year)} {r.label}: {r.value if r.value is not None else '미확인'} ({r.status})")
     brief += ["## AI 조사 요약", "AI 문구는 원문을 대체하지 않습니다. 검토 대기 문구를 확정 사실로 인용하지 마십시오."]
-    briefs = [b for b in project.narrative.get("research_briefs", []) if b.get("status") != "제외"][-2:]
+    source_briefs = deepcopy(project.narrative.get("research_briefs", []))
+    for entry in source_briefs:
+        if entry.get("kind") != NEWS_VERSION:
+            continue
+        for article in entry.get("articles", []):
+            if not article_specific_source(article.get("source_url")):
+                article["source_verified"] = False
+        for section in entry.get("sections", []):
+            citations = section.get("citations", [])
+            section["citations"] = [c for c in citations if article_specific_source(c.get("url"))]
+            if len(section["citations"]) < len(citations):
+                section["text"] += "\n개별 기사 원문 URL 확인 필요"
+    briefs = [b for b in source_briefs if b.get("status") != "제외"][-2:]
     for entry in briefs:
         brief.append(f"조사 상태: {entry['status']} / 수집: {entry['collected_at']}")
         for section in entry.get("sections", [])[:3]:
@@ -98,7 +111,7 @@ def packet_content(project):
         "sources": [{"id": s.source_id, "name": s.name, "url": s.url, "sha256": s.sha256, "collected_at": s.collected_at} for s in project.sources],
         "fx": project.narrative.get("fx_display", []),
         "versions": {key: value for key, value in project.versions.items() if key != "rating_policy"},
-        "research_briefs": project.narrative.get("research_briefs", []),
+        "research_briefs": source_briefs,
         "business_evidence": project.narrative.get("business_evidence", []), "updates": project.narrative.get("partner_updates", []),
         "collection_warnings": project.narrative.get("collection_warnings", []) if not news_only else [],
         "extraction_conflicts": conflicts,

@@ -112,6 +112,12 @@ class ProjectStore:
                 (project.project_id, owner_id, project.title, project.entity.legal_name, project.entity.country, project.status, project.updated_at, payload),
             )
 
+    def release_rejected_news_refresh(self, project_id, owner_id, attempted_at):
+        """Release only this attempt after the API explicitly rejected its request."""
+        with self._connect() as connection:
+            connection.execute('DELETE FROM news_refresh WHERE project_id=? AND owner_id=? AND attempted_at=?',
+                               (project_id, owner_id, attempted_at))
+
     def load(self, project_id: str, owner_id: str = "local-user") -> AnalysisProject:
         with self._connect() as connection:
             row = connection.execute("SELECT payload_json FROM projects WHERE project_id=? AND owner_id=?", (project_id, owner_id)).fetchone()

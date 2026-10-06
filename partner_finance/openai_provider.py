@@ -13,11 +13,12 @@ DEFAULT_OPENAI_MODEL = "gpt-6-luna"
 
 
 class APIRequestError(RuntimeError):
-    def __init__(self, message, *, code="unclassified", retry_after=None, too_large=False):
+    def __init__(self, message, *, code="unclassified", retry_after=None, too_large=False, http_status=None):
         super().__init__(message)
         self.code = code
         self.retry_after = retry_after
         self.too_large = too_large
+        self.http_status = http_status
 
 
 def api_error(exc):
@@ -50,11 +51,12 @@ def api_error(exc):
             if delay is not None:
                 hint += f" 서버 안내 대기시간: {delay:g}초."
         return APIRequestError(f"OpenAI API 요청 실패 (HTTP {exc.code}; code={code}). {hint}",
-                               code=code, retry_after=delay, too_large=too_large)
+                               code=code, retry_after=delay, too_large=too_large, http_status=exc.code)
     from io import BytesIO
     sanitized = urllib.error.HTTPError(exc.url, exc.code, exc.reason, exc.headers,
                                        BytesIO(json.dumps({"error": error}).encode()))
-    return APIRequestError(safe_api_error(sanitized), code=code if code == "context_length_exceeded" else "unclassified")
+    return APIRequestError(safe_api_error(sanitized), code=code if code == "context_length_exceeded" else "unclassified",
+                           http_status=exc.code)
 
 
 def duration_seconds(value):

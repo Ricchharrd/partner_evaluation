@@ -1,6 +1,8 @@
 import tempfile
+import json
 import unittest
-from unittest.mock import patch
+from datetime import date
+from unittest.mock import MagicMock, patch
 
 from streamlit.testing.v1 import AppTest
 
@@ -17,7 +19,43 @@ def dashboard_app():
                   lambda key, default=None: default)
 
 
+def connected_dashboard_app():
+    import streamlit as st
+    from partner_finance.market_ui import render_market
+    from partner_finance.storage import ProjectStore
+    render_market(ProjectStore(st.session_state.test_root), 'test-user',
+                  lambda key, default=None: 'test-key' if key == 'OPENAI_API_KEY' else default)
+
+
 class NewsDashboardTests(unittest.TestCase):
+    def test_update_requires_consent_then_saves_and_displays_new_article(self):
+        url = 'https://www.webuildgroup.com/en/media/press-releases/test-public-news/'
+        payload = {'status': 'completed', 'output': [
+            {'type': 'web_search_call', 'status': 'completed', 'action': {'sources': [{'url': url}]}},
+            {'type': 'message', 'content': [{'type': 'output_text', 'text': json.dumps({'articles': [{
+                'title': 'Webuild 새 수주 발표', 'summary': '회사가 공개한 신규 수주 소식이다.',
+                'published_at': date.today().isoformat(), 'source_url': url,
+                'source_name': 'Webuild', 'topic': '수주 및 사업'}]})}]}]}
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps(payload).encode()
+        with tempfile.TemporaryDirectory() as root, patch('urllib.request.urlopen', return_value=response) as request:
+            app = AppTest.from_function(connected_dashboard_app, default_timeout=20)
+            app.session_state.test_root = root
+            app.run()
+            next(b for b in app.button if b.label == '회사 소식 보기').click().run()
+            next(b for b in app.button if b.label == '최신 뉴스 가져오기 (유료)').click().run()
+            request.assert_not_called()
+            next(b for b in app.button if b.label == '공개자료로 승인하고 실행').click().run()
+            self.assertFalse(app.exception)
+            self.assertFalse(app.error)
+            request.assert_called_once()
+            self.assertTrue(any(s.value == 'Webuild 새 수주 발표' for s in app.subheader))
+            store = ProjectStore(root)
+            webuild = next(p for p in store.list_projects('test-user') if p['legal_name'] == 'Webuild')
+            saved = store.load(webuild['project_id'], 'test-user')
+            self.assertEqual(len(saved_articles(saved)), 3)
+            self.assertEqual(saved.narrative['market_last_count'], 1)
+
     def test_seed_is_idempotent_public_and_exportable(self):
         with tempfile.TemporaryDirectory() as root:
             store = ProjectStore(root)

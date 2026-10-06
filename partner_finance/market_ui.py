@@ -4,7 +4,7 @@ from copy import deepcopy
 from html import escape
 import streamlit as st
 
-from .market_news import (TOPICS, FEATURED_COMPANIES, add_company, collect_news,
+from .market_news import (TOPICS, FEATURED_COMPANIES, NewsUpdateError, add_company, collect_news,
                           company_roles, ensure_featured_companies, featured_company, saved_articles)
 from .openai_provider import DEFAULT_OPENAI_MODEL
 from .hitl import render_hitl, clear_action_tickets
@@ -142,7 +142,7 @@ def render_market(store, owner, secret, *, management=False, can_input=True):
     run = False
     if selected:
         actions = st.columns(2, gap="small")
-        run = actions[0].button("뉴스 업데이트 (유료)", type="primary", width="stretch",
+        run = actions[0].button("최신 뉴스 가져오기 (유료)", type="primary", width="stretch",
                                 disabled=not can_input or remaining > 0 or not secret("OPENAI_API_KEY"))
         actions[1].button("재무 상세분석", width="stretch", on_click=open_financials,
                           args=(selected,), disabled=not can_input)
@@ -152,22 +152,32 @@ def render_market(store, owner, secret, *, management=False, can_input=True):
         st.caption(f"마지막 AI 검색: {checked[:16].replace('T', ' ')} UTC" if checked else "추가 AI 검색 이력 없음, 아래 저장된 공개 뉴스를 바로 읽을 수 있습니다.")
         st.caption("뉴스 열람은 무료입니다. 업데이트만 AI 비용이 발생하며, 실행 전 확인합니다.")
         if remaining:
-            st.caption(f"다음 업데이트까지 약 {(remaining + 59) // 60}분. 실패한 요청도 반복 과금을 막기 위해 대기시간을 적용합니다.")
+            st.caption(f"다음 업데이트까지 약 {(remaining + 59) // 60}분. 처리된 요청이나 시간 초과는 반복 과금을 막기 위해 대기시간을 적용합니다.")
         if not secret("OPENAI_API_KEY"):
-            st.caption("새 뉴스 수집 연결을 준비 중입니다. 저장된 뉴스는 계속 볼 수 있습니다.")
+            st.warning("뉴스 검색 API 키가 설정되지 않았습니다. 배포 설정에 OPENAI_API_KEY를 등록하면 최신 뉴스를 수집할 수 있습니다. 기존 뉴스는 계속 볼 수 있습니다.")
+        failure = selected.narrative.get("market_last_error")
+        if failure:
+            st.warning("마지막 업데이트 실패: " + failure["message"])
         if not can_input:
             st.caption("업데이트와 분석은 왼쪽 공개자료 이용 안내 확인 후 사용할 수 있습니다.")
         if can_input and (run or approved == "market_news"):
             try:
                 with st.spinner("이 기업의 공개 뉴스와 출처를 수집하고 있습니다..."):
-                    articles = collect_news(selected, store, owner, secret("OPENAI_API_KEY"), secret("OPENAI_MODEL", DEFAULT_OPENAI_MODEL))
+                    articles = collect_news(selected, store, owner, secret("OPENAI_API_KEY"),
+                                            secret("OPENAI_NEWS_MODEL", secret("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)))
                 current = st.session_state.get("project")
                 if current and current.project_id == selected.project_id:
                     st.session_state.project = selected
                 st.session_state.market_notice = f"새 수집 {len(articles)}건. 검색 범위 안의 결과이며 전체 뉴스를 보장하지 않습니다."
                 st.rerun()
+            except NewsUpdateError as exc:
+                selected.narrative["market_last_error"] = {"message": str(exc)}
+                persist()
+                st.error(str(exc))
             except Exception:
-                st.error("뉴스 업데이트를 완료하지 못했습니다. 기존 뉴스는 유지됩니다. 연결, 사용 한도 또는 뉴스 출처를 확인해 주세요.")
+                selected.narrative["market_last_error"] = {"message": "뉴스 처리 또는 저장 중 오류가 발생했습니다. 기존 뉴스는 유지됩니다. 운영자는 서버 로그를 확인해 주세요."}
+                persist()
+                st.error(selected.narrative["market_last_error"]["message"])
             finally:
                 clear_action_tickets(selected)
         if has_packet:

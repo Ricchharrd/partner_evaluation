@@ -3,12 +3,13 @@ from datetime import date, timedelta
 import hashlib
 import json
 import re
+import time
 import unicodedata
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 from .hitl import authorize_request
-from .openai_provider import OpenAIProvider, response_text
+from .openai_provider import APIRequestError, OpenAIProvider, response_text
 from .schema import AnalysisProject, EntityProfile, utc_now
 from .workflow import log_action
 
@@ -37,6 +38,53 @@ JSON 객체만 반환한다: {"articles":[{"title":"제목","summary":"요약",
 확인 가능한 기사가 없으면 articles는 빈 배열. 모든 source_url은 검색 결과의 URL 인용으로 확인되어야 한다."""
 
 
+class NewsUpdateError(ValueError):
+    """Safe, user-facing failure; never includes raw model or server output."""
+
+
+def source_key(url):
+    if not safe_source(url):
+        return None
+    p = urlsplit(url)
+    query = [(k, v) for k, v in parse_qsl(p.query, keep_blank_values=True)
+             if not k.lower().startswith('utm_')]
+    return urlunsplit((p.scheme, p.netloc.lower(), p.path.rstrip('/') or '/', urlencode(query), ''))
+
+
+def search_sources(payload):
+    urls = {}
+    for item in payload.get('output', []):
+        if item.get('type') == 'web_search_call':
+            candidates = item.get('action', {}).get('sources', [])
+        elif item.get('type') == 'message':
+            candidates = [a for block in item.get('content', [])
+                          for a in block.get('annotations', []) if a.get('type') == 'url_citation']
+        else:
+            continue
+        for source in candidates:
+            url = source.get('url')
+            key = source_key(url)
+            if key:
+                urls[key] = url
+    return urls
+
+
+def news_json(raw):
+    # Search responses may surround one JSON object with citation prose or fences.
+    decoder = json.JSONDecoder()
+    candidates = []
+    for match in re.finditer(r'\{', raw):
+        try:
+            value, _ = decoder.raw_decode(raw[match.start():])
+        except ValueError:
+            continue
+        if isinstance(value, dict) and isinstance(value.get('articles'), list):
+            candidates.append(value)
+    if len(candidates) != 1:
+        raise NewsUpdateError('검색 응답을 뉴스 목록으로 읽지 못했습니다. 기존 뉴스는 유지했습니다. 다시 실행하려면 새로운 유료 요청 승인이 필요합니다.')
+    return candidates[0]
+
+
 def safe_source(url):
     if not isinstance(url, str) or len(url) > 2048 or re.search(r"[\s<>]", url):
         return False
@@ -49,22 +97,20 @@ def safe_source(url):
 
 def parse_news(payload, today=None):
     today = today or date.today()
-    raw = response_text(payload).strip()
-    if raw.startswith("```"):
-        raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw)
-    parsed = json.loads(raw)
-    if not isinstance(parsed, dict) or not isinstance(parsed.get("articles"), list):
-        raise ValueError("뉴스 응답 형식이 올바르지 않습니다.")
-    cited = {a.get("url") for item in payload.get("output", []) if item.get("type") == "message"
-             for block in item.get("content", []) for a in block.get("annotations", [])
-             if a.get("type") == "url_citation" and safe_source(a.get("url"))}
+    parsed = news_json(response_text(payload).strip())
+    cited = search_sources(payload)
+    if not cited and not any(item.get('type') == 'web_search_call' and item.get('status') == 'completed'
+                             for item in payload.get('output', [])):
+        raise NewsUpdateError('실제 웹 검색 실행을 확인할 수 없습니다. 검색을 지원하는 OPENAI_NEWS_MODEL 설정을 확인해 주세요.')
     articles, known = [], set()
     for row in parsed["articles"][:6]:
         if not isinstance(row, dict):
             continue
         url = row.get("source_url")
-        if not safe_source(url) or url not in cited or url in known:
+        key = source_key(url)
+        if not key or key not in cited or key in known:
             continue
+        url = cited[key]
         title, summary = row.get("title"), row.get("summary")
         if not isinstance(title, str) or not title.strip() or not isinstance(summary, str) or not summary.strip():
             continue
@@ -81,9 +127,9 @@ def parse_news(payload, today=None):
         articles.append({"id": hashlib.sha256(url.encode()).hexdigest()[:24], "title": title.strip()[:240],
                          "summary": summary.strip()[:900], "source_url": url, "source_name": source,
                          "published_at": published or "", "topic": row.get("topic") if row.get("topic") in TOPICS else "기타"})
-        known.add(url)
+        known.add(key)
     if parsed["articles"] and not articles:
-        raise ValueError("인용과 날짜를 확인할 수 있는 뉴스가 없습니다. 기존 결과를 유지합니다.")
+        raise NewsUpdateError("검색은 끝났지만 출처 URL과 최근 90일 날짜 조건을 충족한 기사가 없습니다. 기존 뉴스는 유지했습니다.")
     return articles
 
 
@@ -94,7 +140,7 @@ def saved_articles(project):
             continue
         for row in brief.get("articles", []):
             if safe_source(row.get("source_url")):
-                by_url[row["source_url"]] = {**row, "collected_at": brief["collected_at"],
+                by_url[source_key(row["source_url"])] = {**row, "collected_at": brief["collected_at"],
                                                "status": brief.get("status", "검토 대기")}
     return sorted(by_url.values(), key=lambda r: (r.get("published_at", ""), r["collected_at"]), reverse=True)
 
@@ -191,21 +237,42 @@ def add_company(store, owner, name):
 
 
 def collect_news(project, store, owner, api_key, model):
-    def approve(body):
-        authorize_request(project, body, action="market_news")
-        if not store.claim_news_refresh(project.project_id, owner, REFRESH_SECONDS):
-            raise ValueError("최근 업데이트를 실행했습니다. 기업별로 1시간 뒤 다시 시도할 수 있습니다.")
+    if not api_key or not api_key.strip():
+        raise NewsUpdateError('뉴스 검색 API 키가 없습니다. 배포 설정의 OPENAI_API_KEY를 등록해야 새 뉴스를 수집할 수 있습니다.')
 
-    provider = OpenAIProvider(api_key, model, approval=approve)
-    payload = provider.request({"instructions": INSTRUCTIONS,
-        "input": json.dumps({"legal_name": project.entity.legal_name, "country": project.entity.country,
-                             "as_of": date.today().isoformat()}, ensure_ascii=False),
-        "tools": [{"type": "web_search", "search_context_size": "low"}],
-        "max_tool_calls": 3, "max_output_tokens": 3000})
-    articles = parse_news(payload)
+    claimed_at = None
+
+    def approve(body):
+        nonlocal claimed_at
+        authorize_request(project, body, action="market_news")
+        attempt = time.time()
+        if not store.claim_news_refresh(project.project_id, owner, REFRESH_SECONDS, now=attempt):
+            raise ValueError("최근 업데이트를 실행했습니다. 기업별로 1시간 뒤 다시 시도할 수 있습니다.")
+        claimed_at = attempt
+
+    provider = OpenAIProvider(api_key, model, timeout=180, approval=approve)
+    try:
+        payload = provider.request({"instructions": INSTRUCTIONS,
+            "input": '실제 웹 검색을 수행하고 JSON 뉴스 목록을 반환하세요.\n' + json.dumps(
+                {"legal_name": project.entity.legal_name, "country": project.entity.country,
+                 "as_of": date.today().isoformat()}, ensure_ascii=False),
+            "tools": [{"type": "web_search", "search_context_size": "low"}],
+            "tool_choice": "required", "include": ["web_search_call.action.sources"],
+            "max_tool_calls": 3, "max_output_tokens": 6000})
+        articles = parse_news(payload)
+    except APIRequestError as exc:
+        if claimed_at is not None and exc.http_status in {400, 401, 403, 404, 422}:
+            store.release_rejected_news_refresh(project.project_id, owner, claimed_at)
+        raise NewsUpdateError(str(exc) + ' 뉴스 전용 모델은 OPENAI_NEWS_MODEL에서 설정할 수 있습니다. 기존 뉴스는 유지했습니다.') from None
+    except NewsUpdateError:
+        raise
+    except (ValueError, RuntimeError) as exc:
+        # Provider errors are generated locally and do not include server content.
+        raise NewsUpdateError(str(exc)) from None
     at = utc_now()
     project.narrative["market_last_checked"] = at
     project.narrative["market_last_count"] = len(articles)
+    project.narrative.pop("market_last_error", None)
     if articles:
         record = {"id": hashlib.sha256((project.project_id + at).encode()).hexdigest()[:24],
                   "kind": NEWS_VERSION, "articles": articles, "collected_at": at, "status": "검토 대기",

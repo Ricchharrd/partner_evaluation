@@ -81,7 +81,8 @@ class FinanceApprovalUITests(unittest.TestCase):
             self.assertFalse(any(s.value == "어느 기업을 살펴볼까요?" for s in app.subheader))
             selection = next(e for e in app.expander if e.label.startswith("기존 기업에서"))
             self.assertFalse(selection.proto.expanded)
-            app.text_input[0].set_value("webuild").run()
+            # A form sends its field values together with the submit event.
+            app.text_input[0].set_value("webuild")
             next(b for b in app.button if b.label == "이 기업으로 시작").click().run()
             self.assertEqual(app.session_state.project.project_id, saved.project_id)
             self.assertEqual(len(store.list_projects("test-user")), 1)

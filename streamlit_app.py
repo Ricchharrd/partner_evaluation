@@ -14,7 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from partner_finance import runtime as _runtime
-if getattr(_runtime, "RUNTIME_VERSION", 0) < 2:
+if getattr(_runtime, "RUNTIME_VERSION", 0) < 3:
     reload(_runtime)
 _runtime.refresh_finance_modules(_runtime.module_release())
 
@@ -47,12 +47,12 @@ def secret(name: str, default: str = "") -> str:
 
 
 @st.cache_resource
-def _cached_store(path: str) -> ProjectStore:
+def _cached_store(path: str, release: str) -> ProjectStore:
     return ProjectStore(path)
 
 
 def get_store() -> ProjectStore:
-    return _cached_store(secret("DATA_DIR", str(ROOT / "data")))
+    return _cached_store(secret("DATA_DIR", str(ROOT / "data")), _runtime.module_release())
 
 
 def init_state():

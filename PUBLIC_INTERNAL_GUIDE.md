@@ -77,3 +77,20 @@ Python 계산기는 네트워크나 API를 사용하지 않는다. 필수값·�
 환율은 검증된 회계기간 평균값을 내부에서 제공하며 완전 K-IFRS 환산을 의미하지 않는다.
 사내 스킬에서 사용하는 위험 보정 지표는 공개 웹에서 계산하지 않는다. 사내 결과를 외부 보고서나 공식 신용등급으로 표현하지 않는다.
 대량 문서 처리·추가 외부 조사 전 사용량/보안을 사람에게 확인한다.
+# News update operation
+
+Company news updates call the OpenAI Responses web search tool, not a placeholder.
+Set `OPENAI_API_KEY` in Streamlit Secrets. Optionally set `OPENAI_NEWS_MODEL` to
+a web-search-capable model available to that API project; otherwise `OPENAI_MODEL`
+is used. Each refresh requires the existing public-data and paid-execution consent.
+The request requires a real search and includes `web_search_call.action.sources`.
+Only source-linked articles passing the date checks are stored; malformed responses
+do not overwrite existing news. A successful empty search is recorded separately.
+
+The screen shows sanitized configuration, quota or parsing errors instead of a
+generic placeholder message. Explicit request rejections (HTTP 400/401/403/404/422)
+release only that attempt's cooldown. Completed requests and uncertain network
+failures keep the one-hour cooldown to avoid repeated charges. No automatic paid
+retry is made. API error bodies and credentials are never displayed.
+
+API reference: https://developers.openai.com/api/docs/guides/tools-web-search
